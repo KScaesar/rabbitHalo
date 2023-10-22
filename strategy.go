@@ -1,7 +1,7 @@
 package rabbitHalo
 
 import (
-	"fmt"
+	"log"
 	"math"
 	"sync"
 )
@@ -133,12 +133,12 @@ func (s *MinUsageRateStrategy) SetChildStrategy(id int, childStrategy *MinUsageR
 
 func lazyNewResource[T any](strategy *MinUsageRateStrategy, resourceAll []T, factory func(id int) (T, error)) (T, error) {
 	if strategy.reachMaxLen() { // 如果先更新後查詢, 狀態判斷會有錯誤
-		fmt.Println("reach")
+		log.Println("reuse resource")
 		targetIndex := strategy.UpdateByAcquire()
 		return resourceAll[targetIndex], nil
 	}
 
-	fmt.Printf("lazy \n")
+	log.Println("lazy new")
 	targetIndex := strategy.UpdateByAcquire()
 	resource, err := factory(targetIndex)
 	// fmt.Printf("lazy %#v\n", resource)
