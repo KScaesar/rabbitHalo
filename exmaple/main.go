@@ -1,36 +1,18 @@
-// This example declares a durable Exchange, an ephemeral (auto-delete) Queue,
-// binds the Queue to the Exchange with a binding key, and consumes every
-// message published to that Exchange with that routing key.
 package main
 
 import (
+	"context"
 	"log"
 	"math/rand"
 	"strconv"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
-	"golang.org/x/net/context"
 
 	"github.com/KScaesar/rabbitHalo"
 )
 
-// var (
-// 	uri          = flag.String("uri", "amqp://guest:guest@localhost:5672/", "AMQP URI")
-// 	exchange     = flag.String("exchange", "test-exchange", "Durable, non-auto-deleted AMQP exchange Name")
-// 	exchangeType = flag.String("exchange-type", "direct", "Exchange type - direct|fanout|topic|x-custom")
-// 	queue        = flag.String("queue", "test-queue", "Ephemeral AMQP queue Name")
-// 	bindingKey   = flag.String("key", "test-key", "AMQP binding key")
-// 	consumerTag  = flag.String("consumer-tag", "simple-consumer", "AMQP consumer tag (should not be blank)")
-// 	lifetime     = flag.Duration("lifetime", 5*time.Second, "lifetime of process before Shutdown (0s=infinite)")
-// )
-
-func init() {
-	// flag.Parse()
-}
-
 func main() {
-	// https://github.com/rabbitmq/amqp091-go/blob/master/_examples/simple-consumer/consumer.go
 	pool := rabbitHalo.NewPool(3, 5, func() (*rabbitHalo.AmqpConnection, error) {
 		return rabbitHalo.NewAmqpConnection("amqp://guest:guest@localhost:5672/")
 	})
@@ -71,26 +53,6 @@ func main() {
 	}
 
 	log.Printf("end!\n")
-}
-
-func syncUseCase(pool *rabbitHalo.ConnectionPool, maxWorker int) {
-	go func() {
-		for i := 0; i < maxWorker; i++ {
-			i := i
-			user := "user" + strconv.Itoa(i)
-			SubscribeNotificationByUser(user, pool)
-		}
-	}()
-}
-
-func asyncUseCase(pool *rabbitHalo.ConnectionPool, maxWorker int) {
-	for i := 0; i < maxWorker; i++ {
-		i := i
-		go func() {
-			user := "user" + strconv.Itoa(i)
-			SubscribeNotificationByUser(user, pool)
-		}()
-	}
 }
 
 func SubscribeNotificationByUser(user string, pool *rabbitHalo.ConnectionPool) {
@@ -148,6 +110,26 @@ func SubscribeNotificationByUser(user string, pool *rabbitHalo.ConnectionPool) {
 		// conn.ReleaseChannel(channel)
 		// pool.ReleaseConnection(conn)
 	}()
+}
+
+func syncUseCase(pool *rabbitHalo.ConnectionPool, maxWorker int) {
+	go func() {
+		for i := 0; i < maxWorker; i++ {
+			i := i
+			user := "user" + strconv.Itoa(i)
+			SubscribeNotificationByUser(user, pool)
+		}
+	}()
+}
+
+func asyncUseCase(pool *rabbitHalo.ConnectionPool, maxWorker int) {
+	for i := 0; i < maxWorker; i++ {
+		i := i
+		go func() {
+			user := "user" + strconv.Itoa(i)
+			SubscribeNotificationByUser(user, pool)
+		}()
+	}
 }
 
 func printMessage(_ context.Context, d *amqp.Delivery) error {
