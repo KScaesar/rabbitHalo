@@ -13,7 +13,7 @@ func NewMinUsageRateStrategy(maxLen int) *MinUsageRateStrategy {
 }
 
 type MinUsageRateStrategy struct {
-	mu         sync.RWMutex
+	mu         sync.Mutex
 	minIndex   int
 	usageQty   []int // key:value = { id : qty }
 	totalQty   int
@@ -96,7 +96,6 @@ func (s *MinUsageRateStrategy) UpdateByAcquire() (targetIndex int) {
 	next := roundRobinStrategy(s.minIndex, s.maxLen)
 	s.minIndex = next
 	s.currentLen++
-	// fmt.Println("maxLen", s.maxLen, "len", s.currentLen, "prev", prev, "min", s.minIndex)
 	return prev
 }
 

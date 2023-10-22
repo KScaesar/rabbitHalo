@@ -17,8 +17,8 @@ func main() {
 		return rabbitHalo.NewAmqpConnection("amqp://guest:guest@localhost:5672/")
 	})
 
-	asyncUseCase(pool, 1500)
-	// syncUseCase(pool, 40)
+	// asyncUseCase(pool, 300)
+	syncUseCase(pool, 30)
 
 	// ==pool lock==
 	// reuse resource
@@ -37,12 +37,12 @@ func main() {
 
 	// time.Sleep(30 * time.Minute)
 	// time.Sleep(30 * time.Second)
-	time.Sleep(5 * time.Second)
+	time.Sleep(2 * time.Second)
 
-	err := pool.Close()
-	if err != nil {
-		panic(err)
-	}
+	// err := pool.Close()
+	// if err != nil {
+	// 	panic(err)
+	// }
 
 	log.Printf("end!\n")
 }
@@ -97,10 +97,12 @@ func SubscribeNotificationByUser(user string, pool *rabbitHalo.ConnectionPool) {
 	consumers.Run()
 
 	go func() {
+		// _ = pool
 		time.Sleep(time.Duration(rand.Int31n(10)) * time.Second)
-		// consumers.Stop()
-		// conn.ReleaseChannel(channel)
+		// time.Sleep(1 * time.Second)
+		conn.ReleaseChannel(channel)
 		// pool.ReleaseConnection(conn)
+		// consumers.Stop()
 	}()
 }
 
@@ -120,6 +122,7 @@ func asyncUseCase(pool *rabbitHalo.ConnectionPool, maxWorker int) {
 		go func() {
 			user := "user" + strconv.Itoa(i)
 			SubscribeNotificationByUser(user, pool)
+			time.Sleep(time.Duration(rand.Int31n(10)) * time.Second)
 		}()
 	}
 }

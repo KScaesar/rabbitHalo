@@ -32,7 +32,7 @@ func (c *Consumer) RunConsume() {
 }
 
 func (c *Consumer) Shutdown() error {
-	if err := c.Parent.Cancel(c.Name, true); err != nil {
+	if err := c.Parent.Cancel(c.Name, false); err != nil {
 		return fmt.Errorf("concumer=%v: cancel: %v", c.Name, err)
 	}
 	<-c.done

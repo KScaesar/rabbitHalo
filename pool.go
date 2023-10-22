@@ -1,7 +1,6 @@
 package rabbitHalo
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -53,15 +52,15 @@ type ConnectionPool struct {
 }
 
 func (p *ConnectionPool) AcquireConnection() (conn *Connection, err error) {
-	if p.done.Load() {
-		return nil, errors.New("pool had been closed")
-	}
+	// if p.done.Load() {
+	// 	return nil, errors.New("pool had been closed")
+	// }
 
 	p.mu.Lock()
 	// log.Println("==pool lock==")
 	defer func() {
-		// minIndex, totalScore, listQty := p.strategy.ViewUsageQty()
-		// log.Printf("get connection[id=%v]: min=%v totalScore=%v qty=%v\n", conn.Id, minIndex, totalScore, listQty)
+		minIndex, totalScore, listQty := p.strategy.ViewUsageQty()
+		log.Printf("get connection[id=%v]: min=%v totalScore=%v qty=%v\n", conn.Id, minIndex, totalScore, listQty)
 		// log.Println("==pool unlock==")
 		p.mu.Unlock()
 	}()
@@ -84,9 +83,9 @@ func (p *ConnectionPool) AcquireConnection() (conn *Connection, err error) {
 }
 
 func (p *ConnectionPool) ReleaseConnection(conn *Connection) {
-	if p.done.Load() {
-		return
-	}
+	// if p.done.Load() {
+	// 	return
+	// }
 
 	p.mu.Lock()
 	p.strategy.UpdateByRelease(conn.Id)
@@ -94,9 +93,9 @@ func (p *ConnectionPool) ReleaseConnection(conn *Connection) {
 }
 
 func (p *ConnectionPool) Close() error {
-	if p.done.Swap(true) {
-		return errors.New("pool had been closed")
-	}
+	// if p.done.Swap(true) {
+	// 	return errors.New("pool had been closed")
+	// }
 
 	for _, connection := range p.connectionAll {
 		err := connection.Close()
@@ -123,8 +122,10 @@ func (c *Connection) AcquireChannel() (ch *Channel, err error) {
 	c.mu.Lock()
 	// log.Printf("==conn[id=%v] lock==", c.Id)
 	defer func() {
-		// minIndex, totalScore, listQty := c.strategy.ViewUsageQty()
-		// log.Printf("get channel[id=%v] from conn[id=%v]: min=%v totalScore=%v qty=%v\n", ch.Id, c.Id, minIndex, totalScore, listQty)
+		minIndex, totalScore, listQty := c.strategy.ViewUsageQty()
+		log.Printf("get channel[id=%v] from conn[id=%v]: min=%v totalScore=%v qty=%v\n", ch.Id, c.Id, minIndex, totalScore, listQty)
+		// log.Printf("get channel[id=%v]: min=%v totalScore=%v qty=%v\n", ch.Id, minIndex, totalScore, listQty)
+		// log.Printf("get channel from conn[id=%v]: min=%v totalScore=%v qty=%v\n", c.Id, minIndex, totalScore, listQty)
 		// log.Println("==conn unlock==")
 		c.mu.Unlock()
 	}()
@@ -170,7 +171,8 @@ type Channel struct {
 func (ch *Channel) CreateQueue(useParam ...UseQueueParam) (queueName string, err error) {
 	// https://pkg.go.dev/github.com/rabbitmq/amqp091-go@v1.1.0#pkg-variables
 	// https://github.com/rabbitmq/amqp091-go/issues/170
-	ch.Parent.mu.Lock()
+	parent := ch.Parent
+	parent.mu.Lock()
 	defer ch.Parent.mu.Unlock()
 
 	var ex AmqpExchangeDeclareParam
@@ -233,7 +235,7 @@ func (ch *Channel) CreateConsumers(
 	for i := 0; i < consumerQty; i++ {
 		cTag := consumerName + strconv.Itoa(i)
 
-		log.Printf("starting Consume (consumer tag %q)", cTag)
+		// log.Printf("starting Consume (consumer tag %q)", cTag)
 		amqpConsumer, err := ch.Consume(
 			queueName,
 			cTag,
