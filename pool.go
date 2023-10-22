@@ -58,11 +58,11 @@ func (p *ConnectionPool) AcquireConnection() (conn *Connection, err error) {
 	}
 
 	p.mu.Lock()
-	log.Println("==pool lock==")
+	// log.Println("==pool lock==")
 	defer func() {
-		minIndex, totalQty, listQty := p.strategy.ViewUsageQty()
-		log.Printf("get connection[id=%v]: min=%v total=%v qty=%v\n", conn.Id, minIndex, totalQty, listQty)
-		log.Println("==pool unlock==")
+		// minIndex, totalScore, listQty := p.strategy.ViewUsageQty()
+		// log.Printf("get connection[id=%v]: min=%v totalScore=%v qty=%v\n", conn.Id, minIndex, totalScore, listQty)
+		// log.Println("==pool unlock==")
 		p.mu.Unlock()
 	}()
 
@@ -90,8 +90,6 @@ func (p *ConnectionPool) ReleaseConnection(conn *Connection) {
 
 	p.mu.Lock()
 	p.strategy.UpdateByRelease(conn.Id)
-	minIndex, totalQty, listQty := p.strategy.ViewUsageQty()
-	log.Println("put connection", minIndex, totalQty, listQty)
 	p.mu.Unlock()
 }
 
@@ -123,12 +121,11 @@ type Connection struct {
 
 func (c *Connection) AcquireChannel() (ch *Channel, err error) {
 	c.mu.Lock()
-	log.Printf("==conn[id=%v] lock==", c.Id)
+	// log.Printf("==conn[id=%v] lock==", c.Id)
 	defer func() {
-		minIndex, totalQty, listQty := c.strategy.ViewUsageQty()
-		log.Printf("get channel[id=%v] from conn[id=%v]: min=%v total=%v qty=%v\n", ch.Id, c.Id, minIndex, totalQty, listQty)
-		log.Println("==conn unlock==")
-
+		// minIndex, totalScore, listQty := c.strategy.ViewUsageQty()
+		// log.Printf("get channel[id=%v] from conn[id=%v]: min=%v totalScore=%v qty=%v\n", ch.Id, c.Id, minIndex, totalScore, listQty)
+		// log.Println("==conn unlock==")
 		c.mu.Unlock()
 	}()
 
@@ -149,8 +146,6 @@ func (c *Connection) ReleaseChannel(channel *Channel) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.strategy.UpdateByRelease(channel.Id)
-	minIndex, totalQty, listQty := c.strategy.ViewUsageQty()
-	fmt.Println("get channel", minIndex, totalQty, listQty)
 }
 
 func (c *Connection) Close() error {

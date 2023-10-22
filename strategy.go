@@ -1,7 +1,6 @@
 package rabbitHalo
 
 import (
-	"log"
 	"math"
 	"sync"
 )
@@ -14,27 +13,26 @@ func NewMinUsageRateStrategy(maxLen int) *MinUsageRateStrategy {
 }
 
 type MinUsageRateStrategy struct {
-	updateDataMutex sync.RWMutex
-	searchMinMutex  sync.RWMutex
-	minIndex        int
-	usageQty        []int // key:value = { id : qty }
-	totalQty        int
-	currentLen      int
-	maxLen          int
+	mu         sync.RWMutex
+	minIndex   int
+	usageQty   []int // key:value = { id : qty }
+	totalQty   int
+	currentLen int
+	maxLen     int
 
 	// 一定要指針
 	// https://ithelp.ithome.com.tw/articles/10225968
 	childUsageRate []*MinUsageRateStrategy
 }
 
-func (s *MinUsageRateStrategy) ViewUsageQty() (minIndex, totalQty int, listQty []int) {
-	s.updateDataMutex.Lock()
-	defer s.updateDataMutex.Unlock()
+func (s *MinUsageRateStrategy) ViewUsageQty() (minIndex, totalScore int, listQty []int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.viewUsageQty()
 }
 
 // viewUsageQty time is bigO( M * N * K * .... )
-func (s *MinUsageRateStrategy) viewUsageQty() (minIndex, totalQty int, listQty []int) {
+func (s *MinUsageRateStrategy) viewUsageQty() (minIndex, totalScore int, listQty []int) {
 	if !s.reachMaxLen() || s.notExistChildResource() {
 		minValue := math.MaxInt
 		minIndex = 0
@@ -49,7 +47,7 @@ func (s *MinUsageRateStrategy) viewUsageQty() (minIndex, totalQty int, listQty [
 
 	minValue := math.MaxInt
 	minIndex = 0
-	totalQty = 0
+	totalScore = 0
 	listQty = make([]int, s.maxLen)
 
 	for i := 0; i < s.currentLen; i++ {
@@ -59,11 +57,17 @@ func (s *MinUsageRateStrategy) viewUsageQty() (minIndex, totalQty int, listQty [
 		}
 
 		_, childTotal, _ := child.viewUsageQty()
-		totalQty += childTotal
-		listQty[i] = childTotal
 
-		if minValue > childTotal {
-			minValue = childTotal
+		// 必須把父子資源的分數一起計算
+		// 如果只考慮子資源, 併發的時候
+		// 子資源還沒被使用者申請, 因此父資源的分數都一樣
+		// 會發生父資源大量搶奪同一個子資源
+		// 最小 index 不會切換
+		totalScore += childTotal + s.usageQty[i]
+		score := childTotal + s.usageQty[i]
+		listQty[i] = score
+		if minValue > score {
+			minValue = score
 			minIndex = i
 		}
 	}
@@ -77,17 +81,15 @@ func (s *MinUsageRateStrategy) minimumIndex() int {
 }
 
 func (s *MinUsageRateStrategy) UpdateByAcquire() (targetIndex int) {
-	s.updateDataMutex.Lock()
-	defer s.updateDataMutex.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	prev := s.minIndex
 	s.usageQty[prev]++
 	s.totalQty++
 
 	if s.reachMaxLen() {
-		// s.searchMinMutex.Lock()
 		s.minIndex = s.minimumIndex()
-		// s.searchMinMutex.Unlock()
 		return prev
 	}
 
@@ -99,8 +101,8 @@ func (s *MinUsageRateStrategy) UpdateByAcquire() (targetIndex int) {
 }
 
 func (s *MinUsageRateStrategy) UpdateByRelease(id int) {
-	s.updateDataMutex.Lock()
-	defer s.updateDataMutex.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if id >= s.currentLen {
 		panic("unknown the resource")
@@ -109,9 +111,7 @@ func (s *MinUsageRateStrategy) UpdateByRelease(id int) {
 	s.usageQty[id]--
 	s.totalQty--
 
-	s.searchMinMutex.Lock()
 	s.minIndex = s.minimumIndex()
-	s.searchMinMutex.Unlock()
 }
 
 func (s *MinUsageRateStrategy) reachMaxLen() bool {
@@ -133,15 +133,14 @@ func (s *MinUsageRateStrategy) SetChildStrategy(id int, childStrategy *MinUsageR
 
 func lazyNewResource[T any](strategy *MinUsageRateStrategy, resourceAll []T, factory func(id int) (T, error)) (T, error) {
 	if strategy.reachMaxLen() { // 如果先更新後查詢, 狀態判斷會有錯誤
-		log.Println("reuse resource")
+		// log.Println("reuse resource")
 		targetIndex := strategy.UpdateByAcquire()
 		return resourceAll[targetIndex], nil
 	}
 
-	log.Println("lazy new")
+	// log.Println("lazy new")
 	targetIndex := strategy.UpdateByAcquire()
 	resource, err := factory(targetIndex)
-	// fmt.Printf("lazy %#v\n", resource)
 	if err != nil {
 		return resource, err
 	}

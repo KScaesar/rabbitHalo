@@ -17,8 +17,8 @@ func main() {
 		return rabbitHalo.NewAmqpConnection("amqp://guest:guest@localhost:5672/")
 	})
 
-	// asyncUseCase(pool, 30)
-	syncUseCase(pool, 40)
+	asyncUseCase(pool, 1500)
+	// syncUseCase(pool, 40)
 
 	// ==pool lock==
 	// reuse resource
