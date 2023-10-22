@@ -58,7 +58,7 @@ func (p *ConnectionPool) AcquireConnection() (conn *Connection, err error) {
 	}
 
 	p.mu.Lock()
-	fmt.Println("==pool lock==")
+	log.Println("==pool lock==")
 	defer func() {
 		minIndex, totalQty, listQty := p.strategy.ViewUsageQty()
 		log.Printf("get connection[id=%v]: min=%v total=%v qty=%v\n", conn.Id, minIndex, totalQty, listQty)
@@ -123,10 +123,10 @@ type Connection struct {
 
 func (c *Connection) AcquireChannel() (ch *Channel, err error) {
 	c.mu.Lock()
-	log.Println("==conn lock==")
+	log.Printf("==conn[id=%v] lock==", c.Id)
 	defer func() {
 		minIndex, totalQty, listQty := c.strategy.ViewUsageQty()
-		log.Printf("get channel[id=%v]: min=%v total=%v qty=%v\n", ch.Id, minIndex, totalQty, listQty)
+		log.Printf("get channel[id=%v] from conn[id=%v]: min=%v total=%v qty=%v\n", ch.Id, c.Id, minIndex, totalQty, listQty)
 		log.Println("==conn unlock==")
 
 		c.mu.Unlock()

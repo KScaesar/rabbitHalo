@@ -152,7 +152,8 @@ func lazyNewResource[T any](strategy *MinUsageRateStrategy, resourceAll []T, fac
 func roundRobinStrategy(cursor int, maxLen int) (nextIndex int) {
 	cursor++
 	if cursor >= maxLen {
-		cursor = cursor % maxLen
+		// cursor = cursor % maxLen
+		cursor = maxLen - 1
 	}
 	return cursor
 }

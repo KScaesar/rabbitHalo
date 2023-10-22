@@ -17,33 +17,25 @@ func main() {
 		return rabbitHalo.NewAmqpConnection("amqp://guest:guest@localhost:5672/")
 	})
 
-	asyncUseCase(pool, 30)
-	// syncUseCase(pool, 30)
+	// asyncUseCase(pool, 30)
+	syncUseCase(pool, 40)
 
-	// lazy
-	// 2023/10/22 17:06:15 dialing "amqp://guest:guest@localhost:5672/"
-	// get connection 1 1 [1 0 0]
-	// lazy
-	// get channel 1 1 [1 0 0 0 0]
-	// 2023/10/22 17:06:16 starting Consume (consumer tag "notify:user0-worker0")
-	// 2023/10/22 17:06:16 starting Consume (consumer tag "notify:user0-worker1")
-	// lazy
-	// 2023/10/22 17:06:16 dialing "amqp://guest:guest@localhost:5672/"
-	// get connection 2 2 [1 1 0]
-	// lazy
-	// get channel 1 1 [1 0 0 0 0]
-	// 2023/10/22 17:06:16 starting Consume (consumer tag "notify:user1-worker0")
-	// 2023/10/22 17:06:16 starting Consume (consumer tag "notify:user1-worker1")
-	// lazy
-	// 2023/10/22 17:06:16 dialing "amqp://guest:guest@localhost:5672/"
-	// get connection 2 2 [1 1 0]
-	// lazy
-	// get channel 1 1 [1 0 0 0 0]
-	// 2023/10/22 17:06:16 starting Consume (consumer tag "notify:user2-worker0")
-	// 2023/10/22 17:06:16 starting Consume (consumer tag "notify:user2-worker1")
-	// reach
+	// ==pool lock==
+	// reuse resource
+	// get connection[id=2]: min=0 total=25 qty=[8 9 8]
+	// ==pool unlock==
+	// ==conn[id=2] lock==
+	// reuse resource
+	// get channel[id=2] from conn[id=2]: min=3 total=9 qty=[2 2 2 1 2]
+	// ==conn unlock==
+	// starting Consume (consumer tag "notify:user25-worker0")
+	// starting Consume (consumer tag "notify:user25-worker1")
+	// ==pool lock==
+	// reuse resource
+	// get connection[id=0]: min=0 total=26 qty=[8 9 9]
+	// ==pool unlock==	time.Sleep(60 * time.Minute)
 
-	time.Sleep(60 * time.Minute)
+	// time.Sleep(30 * time.Minute)
 	// time.Sleep(30 * time.Second)
 	time.Sleep(5 * time.Second)
 
