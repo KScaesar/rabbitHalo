@@ -24,7 +24,12 @@ func newConsumer(queueName string, consumerId string, ch *Channel, fn ConsumerFu
 		param.Args,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("amqp comsum: %v", err)
+		return nil, fmt.Errorf("amqp consume: %w", err)
+	}
+
+	err = ch.Qos(param.QosPrefetchCount, param.QosPrefetchSize, param.QosGlobal)
+	if err != nil {
+		return nil, fmt.Errorf("amqp qos: %w", err)
 	}
 
 	consumer := &Consumer{
