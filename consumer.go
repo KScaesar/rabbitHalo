@@ -48,8 +48,11 @@ type Consumer struct {
 	queueName string
 }
 
-func (c *Consumer) SyncConsume() {
-	ctx := context.Background()
+func (c *Consumer) SyncServe() {
+	c.SyncServeWithContext(context.Background())
+}
+
+func (c *Consumer) SyncServeWithContext(ctx context.Context) {
 	for d := range c.amqpConsumer {
 		msg := &d
 		c.messageHandler(ctx, msg)
@@ -83,18 +86,18 @@ func (c *Consumer) Shutdown() error {
 
 type ConsumerAll []*Consumer
 
-func (all ConsumerAll) AsyncRun() {
-	for _, consumer := range all {
+func (all *ConsumerAll) AsyncRun() {
+	for _, consumer := range *all {
 		consumer := consumer
 		go func() {
-			consumer.SyncConsume()
+			consumer.SyncServe()
 		}()
 	}
 }
 
-func (all ConsumerAll) Stop() {
+func (all *ConsumerAll) Stop() {
 	wg := sync.WaitGroup{}
-	for _, consumer := range all {
+	for _, consumer := range *all {
 		consumer := consumer
 		wg.Add(1)
 		go func() {

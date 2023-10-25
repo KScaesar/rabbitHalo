@@ -20,15 +20,15 @@ type ConsumerChain struct {
 	featureChain []ConsumerDecorator
 }
 
-// Link 執行順序參考範例 https://go.dev/play/p/I9cK-VvKjzi
-func (c *ConsumerChain) Link(fn ConsumerFunc) ConsumerFunc {
+// Link The execution order between baseFn and decorator can be referenced in the test file.
+func (c *ConsumerChain) Link(baseFn ConsumerFunc) ConsumerFunc {
 	if len(c.errorChain) == 0 {
 		c.errorChain = []ConsumerDecorator{handleDefaultConsumerError}
 	}
 	all := make([]ConsumerDecorator, 0, len(c.errorChain)+len(c.featureChain))
 	all = append(all, c.errorChain...)
 	all = append(all, c.featureChain...)
-	return LinkFuncAndChain(fn, all...)
+	return LinkFuncAndChain(baseFn, all...)
 }
 
 func (c *ConsumerChain) LinkError(fn ConsumerFunc) ConsumerFunc {

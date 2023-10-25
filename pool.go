@@ -247,8 +247,8 @@ func (ch *Channel) CreateConsumers(queueName string, consumerName string, consum
 
 	var consumers []*Consumer
 	for i := 0; i < consumerQty; i++ {
-		cTag := consumerName + strconv.Itoa(i)
-		consumer, err := newConsumer(queueName, cTag, ch, fn, useParam...)
+		consumerId := consumerName + strconv.Itoa(i)
+		consumer, err := newConsumer(queueName, consumerId, ch, fn, useParam...)
 		if err != nil {
 			return nil, err
 		}
