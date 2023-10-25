@@ -31,18 +31,18 @@ type MessageMux struct {
 	mu              sync.RWMutex
 	isGoroutineSafe atomic.Bool
 
-	// 由於 rabbitmq 有非常靈活的 RoutingKey 機制
-	// RoutingKey 和 BindingKey 可能不是精確配對
+	// Due to the highly flexible RoutingKey mechanism in RabbitMQ,
+	// RoutingKey and BindingKey may not be an exact match.
 	//
-	// 但此 mux 只能做到 "字串精確" 對比
-	// 必須靠 handler func 自行比對 key
-	// 利用 Chain of Responsibility Pattern, 找尋合適的 handler
+	// However, this mux (multiplexer) can only achieve "string exact" comparison,
+	// and it relies on handler functions to compare keys.
+	// Utilizing the Chain of Responsibility Pattern and ClaimTask, it seeks the appropriate handler.
 	//
-	// 以下 RoutingKey , 找尋效率差
-	// 可以考慮不使用 mux 註冊 handler func
+	// The following RoutingKey searching efficiency is low,
+	// and it may be considered to not use mux to register handler functions.
 	//
-	// 1. topic 類型, 也就是 wildcard *.*.*
-	// 2. fanout 類型, 因為 RoutingKey 任意格式在 rabbitmq 都可以配對
+	// 1. For topic kind, which include wildcards like *.*.*
+	// 2. For fanout kind, RabbitMQ allows matching any format of RoutingKey.
 	cNormalHandlers         map[string]ConsumerFunc // RoutingKey:Func
 	cFanoutHandlers         map[string]ConsumerFunc // RoutingKey:Func
 	cBlankKeyFanoutHandlers []ConsumerFunc
@@ -59,46 +59,57 @@ func (mux *MessageMux) serveConsume(ctx context.Context, msg *AmqpMessage) error
 		mux.mu.Lock()
 		defer mux.mu.Unlock()
 	}
+	notMatchKeyHandler := func(_ context.Context, _ *AmqpMessage) error { return ErrNotMatchRoutingKey }
 
-	key := msg.RoutingKey
-	handler, ok := mux.cNormalHandlers[key]
+	routingKey := msg.RoutingKey
+	handler, ok := mux.cNormalHandlers[routingKey]
 	if ok {
 		return mux.consumerChain.Link(handler)(ctx, msg)
 	}
 
-	if key == "" {
-		// Chain of Responsibility Pattern
+	if routingKey == "" {
 		for _, fanoutHandler := range mux.cBlankKeyFanoutHandlers {
 			err := mux.consumerChain.Link(fanoutHandler)(ctx, msg)
 			if err != nil {
 				return err
 			}
-			if isClaimedTask(ctx) {
+			if hadClaimedTask(ctx) {
 				return nil
 			}
 		}
+		return mux.consumerChain.LinkError(notMatchKeyHandler)(ctx, msg)
 	}
 
-	if fanoutHandler, exist := mux.cFanoutHandlers[key]; exist {
+	if fanoutHandler, exist := mux.cFanoutHandlers[routingKey]; exist {
 		return mux.consumerChain.Link(fanoutHandler)(ctx, msg)
 	}
 
-	// Chain of Responsibility Pattern
 	for _, topicHandler := range mux.cWildcardTopicHandlers {
 		err := mux.consumerChain.Link(topicHandler)(ctx, msg)
 		if err != nil {
 			return err
 		}
-		if isClaimedTask(ctx) {
+		if hadClaimedTask(ctx) {
 			return nil
 		}
 	}
 
-	errHandler := func(_ context.Context, _ *AmqpMessage) error { return ErrNotMatchRoutingKey }
-	return mux.consumerChain.LinkError(errHandler)(ctx, msg)
+	for _, fanoutHandler := range mux.cBlankKeyFanoutHandlers {
+		err := mux.consumerChain.Link(fanoutHandler)(ctx, msg)
+		if err != nil {
+			return err
+		}
+		if hadClaimedTask(ctx) {
+			return nil
+		}
+	}
+
+	return mux.consumerChain.LinkError(notMatchKeyHandler)(ctx, msg)
 }
 
-// AddConsumerFeatureChain 執行順序參考範例 https://go.dev/play/p/I9cK-VvKjzi
+// AddConsumerFeatureChain
+// The execution order of chain can be referenced
+// in the chain_test.go: TestConsumerChain_Link_confirm_the_execution_order_of_decorators
 func (mux *MessageMux) AddConsumerFeatureChain(chain ...ConsumerDecorator) *MessageMux {
 	if mux.isGoroutineSafe.Load() {
 		mux.mu.Lock()
@@ -119,19 +130,22 @@ func (mux *MessageMux) AddConsumerErrorChain(chain ...ConsumerDecorator) *Messag
 	return mux
 }
 
-// RegisterConsumerFunc
-// 用在字串精確對比,
-// 如果有動態 key 的註冊需求, 要注意會有 gc 無法回收的問題, map 記憶體不斷成長,
-// 也許 handler 直接和 amqp consume( Channel.CreateConsumer ) 綁定更好.
+// RegisterConsumerFunc is suitable for use when the RoutingKey and BindingKey are an exact match.
 func (mux *MessageMux) RegisterConsumerFunc(bindingKey string, fn ConsumerFunc) {
 	if mux.isGoroutineSafe.Load() {
 		mux.mu.Lock()
 		defer mux.mu.Unlock()
 	}
 
-	if strings.Contains(bindingKey, "*") {
+	if strings.Contains(bindingKey, "*") || strings.Contains(bindingKey, "#") {
 		panic("not allow wildcard symbol")
 	}
+
+	_, ok := mux.cNormalHandlers[bindingKey]
+	if ok {
+		panic("duplicate key: " + bindingKey)
+	}
+
 	mux.cNormalHandlers[bindingKey] = fn
 }
 
@@ -155,28 +169,36 @@ func (mux *MessageMux) RegisterConsumerFuncByFanout(bindingKey string, fn Consum
 		mux.cBlankKeyFanoutHandlers = append(mux.cBlankKeyFanoutHandlers, fn)
 		return n
 	}
+
+	_, ok := mux.cFanoutHandlers[bindingKey]
+	if ok {
+		panic("duplicate key: " + bindingKey)
+	}
+
 	mux.cFanoutHandlers[bindingKey] = fn
 	return -1
 }
 
-// RemoveConsumerFuncByFanout index 為 RegisterConsumerFuncByFanout return value
-func (mux *MessageMux) RemoveConsumerFuncByFanout(index int, bindingKey string) {
+// RemoveConsumerFuncByFanout
+// The index corresponds to the return value of RegisterConsumerFuncByFanout.
+func (mux *MessageMux) RemoveConsumerFuncByFanout(bindingKey string, index ...int) {
 	if mux.isGoroutineSafe.Load() {
 		mux.mu.Lock()
 		defer mux.mu.Unlock()
 	}
 
 	if bindingKey == "" {
-		mux.cBlankKeyFanoutHandlers = append(mux.cBlankKeyFanoutHandlers[:index], mux.cBlankKeyFanoutHandlers[index+1:]...)
+		idx := index[0]
+		mux.cBlankKeyFanoutHandlers = append(mux.cBlankKeyFanoutHandlers[:idx], mux.cBlankKeyFanoutHandlers[idx+1:]...)
 		return
 	}
 	delete(mux.cFanoutHandlers, bindingKey)
 }
 
 // RegisterConsumerFuncByTopic
-// 通常是 bindingKey 包含 * wildcard 才會使用此函數,
-// bindingKey 無實際作用,
-// 方便閱讀程式碼知道 rabbitmq 具體用了什麼的 wildcard key.
+// Typically, this function is used when the bindingKey includes * or # wildcard.
+// The bindingKey doesn't have an actual effect;
+// it is used for readability to understand which wildcard key RabbitMQ is utilizing.
 func (mux *MessageMux) RegisterConsumerFuncByTopic(bindingKey string, fn ConsumerFunc) (index int) {
 	if mux.isGoroutineSafe.Load() {
 		mux.mu.Lock()
@@ -188,7 +210,8 @@ func (mux *MessageMux) RegisterConsumerFuncByTopic(bindingKey string, fn Consume
 	return n
 }
 
-// RemoveConsumerFuncByTopic index 為 RegisterConsumerFuncByTopic return value
+// RemoveConsumerFuncByTopic
+// The index corresponds to the return value of RegisterConsumerFuncByTopic.
 func (mux *MessageMux) RemoveConsumerFuncByTopic(index int) {
 	if mux.isGoroutineSafe.Load() {
 		mux.mu.Lock()
@@ -244,16 +267,17 @@ func contextWithTaskChecker(ctx context.Context) context.Context {
 	return context.WithValue(ctx, taskChecker{}, &isClaimed)
 }
 
-func isClaimedTask(ctx context.Context) bool {
+func hadClaimedTask(ctx context.Context) bool {
 	isClaimed := ctx.Value(taskChecker{}).(*bool)
 	return *isClaimed
 }
 
 // ClaimTask
-// 由於 rabbitmq 有非常靈活的 RoutingKey 機制,
-// 必須靠 handler func 自行比對, 是否該訊息屬於自己,
-// 通常只有 key kind = topic, fanout 才有機會用到此函數.
+// Due to the flexible RoutingKey mechanism in rabbitmq,
+// it's necessary for handlers to check whether a message belongs to them.
+// Generally, the function is used by key kinds like "topic" or "fanout".
 func ClaimTask(ctx context.Context) {
 	isClaimed := ctx.Value(taskChecker{}).(*bool)
 	*isClaimed = true
+	return
 }
