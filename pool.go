@@ -6,37 +6,47 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-//
+func newAmqpConnect(amqpUri string) (conn *AmqpConnection, Err error) {
+	retryMaxTime := time.Minute
+	// retryMaxTime := 10 * time.Second
 
-func NewAmqpConnection(amqpUri string) (*AmqpConnection, error) {
-	log.Printf("dialing %q", amqpUri)
+	cnt := 0
+	Err = retry(retryMaxTime, func() (err error) {
+		cnt++
+		log.Printf("dail rabbitmq %v times", cnt)
 
-	conn, err := amqp.Dial(amqpUri)
-	if err != nil {
-		return nil, fmt.Errorf("dial: %v", err)
-	}
+		conn, err = amqp.Dial(amqpUri)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
 
 	go func() {
-		err = <-conn.NotifyClose(make(chan *amqp.Error))
-		log.Printf("close msg: %v", err)
+		err := <-conn.NotifyClose(make(chan *amqp.Error))
+		log.Printf("close connection: %v", err)
 	}()
-	return conn, err
+
+	return
 }
 
 // pool
 
 // NewPool pool 有 connectionMaxQty 個 connection , 每個 conn 有 channelMaxQty 個 channel,
 // 因此總數量是 connectionMaxQty * channelMaxQty
-func NewPool(connectionMaxQty, channelMaxQty int, factory func() (*AmqpConnection, error)) *ConnectionPool {
+func NewPool(amqpUri string, connectionMaxQty, channelMaxQty int) *ConnectionPool {
 	pool := &ConnectionPool{
 		connectionAll: make([]*Connection, connectionMaxQty),
 		channelMaxQty: channelMaxQty,
 		strategy:      NewMinUsageRateStrategy(connectionMaxQty),
-		factory:       factory,
+		factory: func() (*amqp.Connection, error) {
+			return newAmqpConnect(amqpUri)
+		},
 	}
 	pool.strategy.InitChildStrategy(connectionMaxQty)
 	return pool
@@ -68,18 +78,23 @@ func (p *ConnectionPool) AcquireConnection() (conn *Connection, err error) {
 	return lazyNewResource(p.strategy, p.connectionAll, func(id int) (conn *Connection, err error) {
 		amqpConn, err := p.factory()
 		if err != nil {
-			return conn, err
+			return nil, err
 		}
-		connection := &Connection{
-			Id:             id,
-			channelAll:     make([]*Channel, p.channelMaxQty),
-			strategy:       NewMinUsageRateStrategy(p.channelMaxQty),
-			Parent:         p,
-			AmqpConnection: amqpConn,
-		}
+		connection := newConnection(id, amqpConn, p, p.channelMaxQty)
 		p.strategy.SetChildStrategy(id, connection.strategy)
 		return connection, nil
 	})
+}
+
+func newConnection(id int, amqpConn *AmqpConnection, pool *ConnectionPool, channelMaxQty int) *Connection {
+	connection := &Connection{
+		Id:             id,
+		channelAll:     make([]*Channel, channelMaxQty),
+		strategy:       NewMinUsageRateStrategy(channelMaxQty),
+		Parent:         pool,
+		AmqpConnection: amqpConn,
+	}
+	return connection
 }
 
 func (p *ConnectionPool) ReleaseConnection(conn *Connection) {
@@ -219,44 +234,23 @@ func (ch *Channel) CreateQueue(useParam ...UseQueueParam) (queueName string, err
 	return queue.Name, nil
 }
 
-func (ch *Channel) CreateConsumers(
-	owner string, queueName string, consumerName string, consumerQty int, fn ConsumerHandlerFunc, useParam ...UseConsumerParam,
-) (ConsumerAll, error) {
+func (ch *Channel) CreateConsumer(queueName string, consumerName string, fn ConsumerFunc, useParam ...UseConsumerParam) (*Consumer, error) {
+	ch.Parent.mu.Lock()
+	defer ch.Parent.mu.Unlock()
+	return newConsumer(queueName, consumerName, ch, fn, useParam...)
+}
+
+func (ch *Channel) CreateConsumers(queueName string, consumerName string, consumerQty int, fn ConsumerFunc, useParam ...UseConsumerParam) ([]*Consumer, error) {
 	// https://github.com/rabbitmq/amqp091-go/issues/170
 	ch.Parent.mu.Lock()
 	defer ch.Parent.mu.Unlock()
 
-	var param AmqpConsumeParam
-	for _, replace := range useParam {
-		replace(&param)
-	}
-
-	var consumers []Consumer
+	var consumers []*Consumer
 	for i := 0; i < consumerQty; i++ {
 		cTag := consumerName + strconv.Itoa(i)
-
-		// log.Printf("starting Consume (consumer tag %q)", cTag)
-		amqpConsumer, err := ch.Consume(
-			queueName,
-			cTag,
-			param.AutoAck,
-			param.Exclusive,
-			param.NoLocal,
-			param.NoWait,
-			param.Args,
-		)
+		consumer, err := newConsumer(queueName, cTag, ch, fn, useParam...)
 		if err != nil {
-			return nil, fmt.Errorf("NewConsumerAllBySingleChannel: %v", err)
-		}
-
-		consumer := Consumer{
-			Owner:          owner,
-			Parent:         ch,
-			queueName:      queueName,
-			messageHandler: fn,
-			amqpConsumer:   amqpConsumer,
-			Name:           cTag,
-			done:           make(chan struct{}),
+			return nil, err
 		}
 		consumers = append(consumers, consumer)
 	}

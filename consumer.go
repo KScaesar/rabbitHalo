@@ -7,22 +7,48 @@ import (
 	"sync"
 )
 
-type ConsumerHandlerFunc func(context.Context, *AmqpMessage) error
+func newConsumer(queueName string, consumerId string, ch *Channel, fn ConsumerFunc, useParam ...UseConsumerParam) (*Consumer, error) {
+	var param AmqpConsumeParam
+	for _, replace := range useParam {
+		replace(&param)
+	}
+
+	// log.Printf("starting Consume (consumer tag %q)", cTag)
+	amqpConsumer, err := ch.Consume(
+		queueName,
+		consumerId,
+		param.AutoAck,
+		param.Exclusive,
+		param.NoLocal,
+		param.NoWait,
+		param.Args,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("amqp comsum: %v", err)
+	}
+
+	consumer := &Consumer{
+		Parent:         ch,
+		queueName:      queueName,
+		messageHandler: fn,
+		amqpConsumer:   amqpConsumer,
+		Id:             consumerId,
+		done:           make(chan struct{}),
+	}
+	return consumer, nil
+}
 
 type Consumer struct {
-	Name           string
-	messageHandler ConsumerHandlerFunc
+	Id             string
+	messageHandler ConsumerFunc
 	amqpConsumer   AmqpConsumer
 	done           chan struct{}
 
 	Parent    *Channel
 	queueName string
-
-	// consumer belong to who
-	Owner string
 }
 
-func (c *Consumer) RunConsume() {
+func (c *Consumer) SyncConsume() {
 	ctx := context.Background()
 	for d := range c.amqpConsumer {
 		msg := &d
@@ -32,11 +58,11 @@ func (c *Consumer) RunConsume() {
 }
 
 func (c *Consumer) Shutdown() error {
-	if err := c.Parent.Cancel(c.Name, false); err != nil {
-		return fmt.Errorf("concumer=%v: cancel: %v", c.Name, err)
+	if err := c.Parent.Cancel(c.Id, false); err != nil {
+		return fmt.Errorf("concumer=%v: cancel: %v", c.Id, err)
 	}
 	<-c.done
-	log.Printf("consumer Shutdown: %v", c.Name)
+	log.Printf("consumer Shutdown: %v", c.Id)
 
 	// queue, err := c.Parent.QueueInspect(c.queueName)
 	// if err != nil {
@@ -55,13 +81,13 @@ func (c *Consumer) Shutdown() error {
 	return nil
 }
 
-type ConsumerAll []Consumer
+type ConsumerAll []*Consumer
 
-func (all ConsumerAll) Run() {
+func (all ConsumerAll) AsyncRun() {
 	for _, consumer := range all {
 		consumer := consumer
 		go func() {
-			consumer.RunConsume()
+			consumer.SyncConsume()
 		}()
 	}
 }
@@ -75,10 +101,15 @@ func (all ConsumerAll) Stop() {
 			defer wg.Done()
 			err := consumer.Shutdown()
 			if err != nil {
-				log.Printf("consumer=%v: Shutdown: %v", consumer.Name, err)
+				log.Printf("consumer=%v: Shutdown: %v", consumer.Id, err)
 			}
 		}()
 	}
 	wg.Wait()
 	return
+}
+
+func (all *ConsumerAll) AddConsumer(cAll ...*Consumer) *ConsumerAll {
+	*all = append(*all, cAll...)
+	return all
 }
