@@ -21,6 +21,10 @@ func SetDefaultLogger(l Logger) {
 	defaultLogger = l
 }
 
+func DefaultLogger() Logger {
+	return defaultLogger
+}
+
 func NewLogger(callDepth int, flag int) *stdLogger {
 	l := &stdLogger{
 		debug:     log.New(os.Stderr, "Debug: ", flag),

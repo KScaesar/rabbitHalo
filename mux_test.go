@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestClaimTask_apply_handlers_for_ByFanout_and_ByTopic_success(t *testing.T) {
+func TestStopNextFunc_apply_handlers_for_ByFanout_and_ByTopic_success(t *testing.T) {
 	// arrange
 	mux := NewMessageMux()
 	var recordTasks []string
@@ -18,7 +18,7 @@ func TestClaimTask_apply_handlers_for_ByFanout_and_ByTopic_success(t *testing.T)
 		if msg.RoutingKey != bindingKey1 {
 			return nil
 		}
-		ClaimTask(ctx)
+		StopNextFunc(ctx)
 
 		recordTasks = append(recordTasks, msg.RoutingKey+"_ok!")
 		return nil
@@ -30,7 +30,7 @@ func TestClaimTask_apply_handlers_for_ByFanout_and_ByTopic_success(t *testing.T)
 		if msg.RoutingKey != bindingKey2 {
 			return nil
 		}
-		ClaimTask(ctx)
+		StopNextFunc(ctx)
 
 		recordTasks = append(recordTasks, msg.RoutingKey+"_ok!")
 		return nil
@@ -44,7 +44,7 @@ func TestClaimTask_apply_handlers_for_ByFanout_and_ByTopic_success(t *testing.T)
 		if msg.RoutingKey != routingKey3a {
 			return nil
 		}
-		ClaimTask(ctx)
+		StopNextFunc(ctx)
 
 		recordTasks = append(recordTasks, msg.RoutingKey+"_ok!")
 		return nil
@@ -57,7 +57,7 @@ func TestClaimTask_apply_handlers_for_ByFanout_and_ByTopic_success(t *testing.T)
 		if msg.RoutingKey != routingKey4 {
 			return nil
 		}
-		ClaimTask(ctx)
+		StopNextFunc(ctx)
 
 		recordTasks = append(recordTasks, msg.RoutingKey+"_ok!")
 		return nil
@@ -69,7 +69,7 @@ func TestClaimTask_apply_handlers_for_ByFanout_and_ByTopic_success(t *testing.T)
 		if msg.RoutingKey != bindingKey5 {
 			return nil
 		}
-		ClaimTask(ctx)
+		StopNextFunc(ctx)
 
 		recordTasks = append(recordTasks, msg.RoutingKey+"_ok!")
 		return nil

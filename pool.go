@@ -239,7 +239,7 @@ func (ch *Channel) CreateConsumer(queueName string, consumerName string, fn Cons
 	return newConsumer(queueName, consumerName, ch, fn, useParam...)
 }
 
-func (ch *Channel) CreateConsumers(queueName string, consumerName string, consumerQty int, fn ConsumerFunc, useParam ...UseConsumerParam) ([]*Consumer, error) {
+func (ch *Channel) CreateConsumers(queueName string, consumerName string, fn ConsumerFunc, consumerQty int, useParam ...UseConsumerParam) ([]*Consumer, error) {
 	// https://github.com/rabbitmq/amqp091-go/issues/170
 	ch.Parent.mu.Lock()
 	defer ch.Parent.mu.Unlock()

@@ -4,9 +4,7 @@ package rabbitHalo_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log"
 	"math/rand"
 	"strconv"
 	"testing"
@@ -39,7 +37,7 @@ func asyncUseCase(conn *rabbitHalo.Connection, mux *rabbitHalo.MessageMux, maxWo
 
 func SubscribeNotificationByUser(user string, conn *rabbitHalo.Connection, mux *rabbitHalo.MessageMux) {
 	ttl := 5 * time.Second
-	queue1 := "notify:" + user
+	queue1 := "group:" + user
 	queue2 := "private:" + user
 
 	channel, err := conn.AcquireChannel()
@@ -47,14 +45,18 @@ func SubscribeNotificationByUser(user string, conn *rabbitHalo.Connection, mux *
 		panic(err)
 	}
 
+	// queue
+
 	const (
 		ex1     = "broadcast"
 		ex1Type = "fanout"
 		key1    = "fanout.bindKey.invalid"
 	)
+	mux.RegisterConsumerFuncByFanout("", printMessage)
+	// mux.RegisterConsumerFuncByFanout(key1, printMessage)
 	_, err1 := channel.CreateQueue(rabbitHalo.SetupDefaultQueue(ex1, ex1Type, queue1, key1), rabbitHalo.SetupTemporaryQueue(ttl))
 	if err1 != nil {
-		log.Fatalf("%v", err)
+		rabbitHalo.DefaultLogger().Fatal("%v", err)
 	}
 
 	const (
@@ -62,31 +64,32 @@ func SubscribeNotificationByUser(user string, conn *rabbitHalo.Connection, mux *
 		ex2Type = "topic"
 		key2    = "notify.*.*.*"
 	)
+	mux.RegisterConsumerFuncByTopic("notify.*.*.*", topicPrintMessage)
 	_, err2 := channel.CreateQueue(rabbitHalo.SetupDefaultQueue(ex2, ex2Type, queue1, key2), rabbitHalo.SetupTemporaryQueue(ttl))
 	if err2 != nil {
-		log.Fatalf("%v", err2)
+		rabbitHalo.DefaultLogger().Fatal("%v", err2)
 	}
 
 	ex3 := "single"
 	ex3Type := "direct"
 	key3 := user
+	mux.RegisterConsumerFunc(key3, printMessage)
 	_, err3 := channel.CreateQueue(rabbitHalo.SetupDefaultQueue(ex3, ex3Type, queue2, key3), rabbitHalo.SetupTemporaryQueue(ttl))
 	if err3 != nil {
-		log.Fatalf("%v", err3)
+		rabbitHalo.DefaultLogger().Fatal("%v", err3)
 	}
 
-	//
+	// consumer
 
 	consumerName1 := fmt.Sprintf("%v-worker", queue1)
-	consumer1, err := channel.CreateConsumers(queue1, consumerName1, 2, mux.ServeConsume, rabbitHalo.SetupDefaultQos)
+	consumer1, err := channel.CreateConsumers(queue1, consumerName1, mux.ServeConsume, 2, rabbitHalo.SetupDefaultQos)
 	if err != nil {
-		log.Fatalf("%v", err)
+		rabbitHalo.DefaultLogger().Fatal("%v", err)
 	}
-
 	consumerName2 := fmt.Sprintf("%v-worker", queue2)
 	consumer2, err := channel.CreateConsumer(queue2, consumerName2, mux.ServeConsume)
 	if err != nil {
-		log.Fatalf("%v", err)
+		rabbitHalo.DefaultLogger().Fatal("%v", err)
 	}
 
 	var consumers rabbitHalo.ConsumerAll
@@ -108,17 +111,12 @@ func TestConsumer_Consume(t *testing.T) {
 	require.NoError(t, err)
 
 	mux := rabbitHalo.NewMessageMux()
-	mux.AddConsumerFeatureChain(testMiddleware1, testMiddleware2)
-	mux.RegisterConsumerFuncByFanout("", printMessage)
-	mux.RegisterConsumerFuncByFanout("fanout.bindKey.invalid", fanoutPrintMessage)
-	mux.RegisterConsumerFuncByFanout("error", raiseError)
-	mux.RegisterConsumerFuncByTopic("notify.*.*.*", topicPrintMessage)
 
 	// closeTime := 10 * time.Second
 	closeTime := 10 * time.Minute
 
-	// syncUseCase(connection, mux, 30)
-	asyncUseCase(connection, mux, 30)
+	syncUseCase(connection, mux, 3)
+	// asyncUseCase(connection, mux, 30)
 
 	time.Sleep(closeTime)
 }
@@ -127,10 +125,11 @@ func topicPrintMessage(ctx context.Context, d *rabbitHalo.AmqpMessage) error {
 	if d.RoutingKey != "notify.*.*.ios" {
 		return nil
 	}
-	rabbitHalo.ClaimTask(ctx)
+	rabbitHalo.StopNextFunc(ctx)
 
-	log.Printf(
-		"Topic DeliveryTag: [%v], payload: %q, key: %v",
+	rabbitHalo.DefaultLogger().Info(
+		"cId=%q: DeliveryTag=[%v]: payload=%q: key=%v",
+		d.ConsumerTag,
 		d.DeliveryTag,
 		d.Body,
 		d.RoutingKey,
@@ -140,55 +139,18 @@ func topicPrintMessage(ctx context.Context, d *rabbitHalo.AmqpMessage) error {
 }
 
 func printMessage(ctx context.Context, d *rabbitHalo.AmqpMessage) error {
-	log.Printf(
-		"DeliveryTag: [%v], payload: %q, key: %v",
+	// if d.RoutingKey != "fanout.bindKey.invalid" {
+	// 	return nil
+	// }
+	// rabbitHalo.StopNextFunc(ctx)
+
+	rabbitHalo.DefaultLogger().Info(
+		"cId=%q: DeliveryTag=[%v]: payload=%q: key=%v",
+		d.ConsumerTag,
 		d.DeliveryTag,
 		d.Body,
 		d.RoutingKey,
 	)
 	d.Ack(false)
 	return nil
-}
-
-func fanoutPrintMessage(ctx context.Context, d *rabbitHalo.AmqpMessage) error {
-	if d.RoutingKey != "fanout.bindKey.invalid" {
-		return nil
-	}
-	rabbitHalo.ClaimTask(ctx)
-
-	log.Printf(
-		"Fanout DeliveryTag: [%v], payload: %q, key: %v",
-		d.DeliveryTag,
-		d.Body,
-		d.RoutingKey,
-	)
-	d.Ack(false)
-	return nil
-}
-
-func raiseError(ctx context.Context, d *rabbitHalo.AmqpMessage) error {
-	if d.RoutingKey != "error" {
-		return nil
-	}
-	rabbitHalo.ClaimTask(ctx)
-
-	return errors.New("project 開天窗")
-}
-
-func testMiddleware1(next rabbitHalo.ConsumerFunc) rabbitHalo.ConsumerFunc {
-	return func(ctx context.Context, msg *rabbitHalo.AmqpMessage) error {
-		log.Printf("middleware before 1")
-		err := next(ctx, msg)
-		log.Printf("middleware after 1")
-		return err
-	}
-}
-
-func testMiddleware2(next rabbitHalo.ConsumerFunc) rabbitHalo.ConsumerFunc {
-	return func(ctx context.Context, msg *rabbitHalo.AmqpMessage) error {
-		log.Printf("middleware before 2")
-		err := next(ctx, msg)
-		log.Printf("middleware after 2")
-		return err
-	}
 }

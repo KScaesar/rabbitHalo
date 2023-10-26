@@ -34,7 +34,7 @@ type MessageMux struct {
 	//
 	// However, this mux (multiplexer) can only achieve "string exact" comparison,
 	// and it relies on handler functions to compare keys.
-	// Utilizing the Chain of Responsibility Pattern and ClaimTask, it seeks the appropriate handler.
+	// Utilizing the Chain of Responsibility Pattern and StopNextFunc, it seeks the appropriate handler.
 	//
 	// The following RoutingKey searching efficiency is low,
 	// and it may be considered to not use mux to register handler functions.
@@ -68,7 +68,7 @@ func (mux *MessageMux) serveConsume(ctx context.Context, msg *AmqpMessage) error
 	if routingKey == "" {
 		for _, fanoutHandler := range mux.cBlankKeyFanoutHandlers {
 			err := mux.consumerChain.Link(fanoutHandler)(ctx, msg)
-			if err != nil || hadClaimedTask(ctx) {
+			if err != nil || isNextFuncStopped(ctx) {
 				return err
 			}
 		}
@@ -81,14 +81,14 @@ func (mux *MessageMux) serveConsume(ctx context.Context, msg *AmqpMessage) error
 
 	for _, topicHandler := range mux.cWildcardTopicHandlers {
 		err := mux.consumerChain.Link(topicHandler)(ctx, msg)
-		if err != nil || hadClaimedTask(ctx) {
+		if err != nil || isNextFuncStopped(ctx) {
 			return err
 		}
 	}
 
 	for _, fanoutHandler := range mux.cBlankKeyFanoutHandlers {
 		err := mux.consumerChain.Link(fanoutHandler)(ctx, msg)
-		if err != nil || hadClaimedTask(ctx) {
+		if err != nil || isNextFuncStopped(ctx) {
 			return err
 		}
 	}
@@ -242,7 +242,7 @@ func handleDefaultConsumerError(next ConsumerFunc) ConsumerFunc {
 				msg.Body,
 				err,
 			)
-			return nil
+			return err
 		}
 		return nil
 	}
@@ -250,7 +250,7 @@ func handleDefaultConsumerError(next ConsumerFunc) ConsumerFunc {
 
 func handleTechnicalContext(next ConsumerFunc) ConsumerFunc {
 	return func(ctx context.Context, msg *AmqpMessage) error {
-		ctx1 := contextWithTaskChecker(ctx)
+		ctx1 := contextWithNextChecker(ctx)
 		// ctx2 := ctx1
 		lastCtx := ctx1
 		return next(lastCtx, msg)
@@ -259,24 +259,25 @@ func handleTechnicalContext(next ConsumerFunc) ConsumerFunc {
 
 //
 
-type taskChecker struct{}
+type nextChecker struct{}
 
-func contextWithTaskChecker(ctx context.Context) context.Context {
-	var isClaimed bool
-	return context.WithValue(ctx, taskChecker{}, &isClaimed)
+func contextWithNextChecker(ctx context.Context) context.Context {
+	var isStopped bool
+	return context.WithValue(ctx, nextChecker{}, &isStopped)
 }
 
-func hadClaimedTask(ctx context.Context) bool {
-	isClaimed := ctx.Value(taskChecker{}).(*bool)
-	return *isClaimed
+func isNextFuncStopped(ctx context.Context) bool {
+	isStopped := ctx.Value(nextChecker{}).(*bool)
+	return *isStopped
 }
 
-// ClaimTask
+// StopNextFunc
 // Due to the flexible RoutingKey mechanism in rabbitmq,
 // it's necessary for handlers to check whether a message belongs to them.
-// Generally, the function is used by key kinds like "topic" or "fanout".
-func ClaimTask(ctx context.Context) {
-	isClaimed := ctx.Value(taskChecker{}).(*bool)
-	*isClaimed = true
+//
+// Use Chain of Responsibility Design Pattern.
+func StopNextFunc(ctx context.Context) {
+	isStopped := ctx.Value(nextChecker{}).(*bool)
+	*isStopped = true
 	return
 }
