@@ -110,6 +110,18 @@ func (mux *MessageMux) serveConsume(ctx context.Context, msg *AmqpMessage) error
 // AddConsumerFeatureChain
 // The execution order of chain can be referenced
 // in the chain_test.go: TestConsumerChain_Link_confirm_the_execution_order_of_decorators
+//
+// The first decorator in the chain,
+// 'before' will be executed first, and then 'after' will be executed last.
+//
+//	chain[0] = func(next ConsumerFunc) ConsumerFunc {
+//	       return func(ctx context.Context, msg *AmqpMessage) error {
+//	           // before
+//	           err := next(ctx, msg)
+//	           // after
+//	           return err
+//	       }
+//	   }
 func (mux *MessageMux) AddConsumerFeatureChain(chain ...ConsumerDecorator) *MessageMux {
 	if mux.isGoroutineSafe.Load() {
 		mux.mu.Lock()
