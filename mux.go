@@ -68,11 +68,8 @@ func (mux *MessageMux) serveConsume(ctx context.Context, msg *AmqpMessage) error
 	if routingKey == "" {
 		for _, fanoutHandler := range mux.cBlankKeyFanoutHandlers {
 			err := mux.consumerChain.Link(fanoutHandler)(ctx, msg)
-			if err != nil {
+			if err != nil || hadClaimedTask(ctx) {
 				return err
-			}
-			if hadClaimedTask(ctx) {
-				return nil
 			}
 		}
 		return mux.consumerChain.LinkError(notMatchKeyHandler)(ctx, msg)
@@ -84,21 +81,15 @@ func (mux *MessageMux) serveConsume(ctx context.Context, msg *AmqpMessage) error
 
 	for _, topicHandler := range mux.cWildcardTopicHandlers {
 		err := mux.consumerChain.Link(topicHandler)(ctx, msg)
-		if err != nil {
+		if err != nil || hadClaimedTask(ctx) {
 			return err
-		}
-		if hadClaimedTask(ctx) {
-			return nil
 		}
 	}
 
 	for _, fanoutHandler := range mux.cBlankKeyFanoutHandlers {
 		err := mux.consumerChain.Link(fanoutHandler)(ctx, msg)
-		if err != nil {
+		if err != nil || hadClaimedTask(ctx) {
 			return err
-		}
-		if hadClaimedTask(ctx) {
-			return nil
 		}
 	}
 
