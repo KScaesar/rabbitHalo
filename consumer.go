@@ -3,7 +3,6 @@ package rabbitHalo
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 )
 
@@ -13,7 +12,7 @@ func newConsumer(queueName string, consumerId string, ch *Channel, fn ConsumerFu
 		replace(&param)
 	}
 
-	// log.Printf("starting Consume (consumer tag %q)", cTag)
+	defaultLogger.Info("starting Consume (consumer tag %q)", consumerId)
 	amqpConsumer, err := ch.Consume(
 		queueName,
 		consumerId,
@@ -70,20 +69,20 @@ func (c *Consumer) Shutdown() error {
 		return fmt.Errorf("concumer=%v: cancel: %v", c.Id, err)
 	}
 	<-c.done
-	log.Printf("consumer Shutdown: %v", c.Id)
+	defaultLogger.Info("consumer Shutdown: %v", c.Id)
 
 	// queue, err := c.Parent.QueueInspect(c.queueName)
 	// if err != nil {
 	// 	return fmt.Errorf("queue=%v: view : %w", c.queueName, err)
 	// }
 	//
-	// log.Printf("queue=%v: consumer qty: %v", c.queueName, queue.Consumers)
+
 	// if queue.Consumers == 0 {
 	// 	err := c.Parent.Close()
 	// 	if err != nil {
 	// 		return fmt.Errorf("close Parent: %v", err)
 	// 	}
-	// 	log.Printf("Parent close!")
+	// 	defaultLogger.Info("Parent close!")
 	// }
 
 	return nil
@@ -109,7 +108,7 @@ func (all *ConsumerAll) Stop() {
 			defer wg.Done()
 			err := consumer.Shutdown()
 			if err != nil {
-				log.Printf("consumer=%v: Shutdown: %v", consumer.Id, err)
+				defaultLogger.Error("consumer=%v: Shutdown: %v", consumer.Id, err)
 			}
 		}()
 	}

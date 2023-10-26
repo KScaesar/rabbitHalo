@@ -3,7 +3,6 @@ package rabbitHalo
 import (
 	"context"
 	"errors"
-	"log"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -86,7 +85,7 @@ func TestClaimTask_apply_handlers_for_ByFanout_and_ByTopic_success(t *testing.T)
 					actualNotMatchKeys = append(actualNotMatchKeys, msg.RoutingKey)
 					return nil
 				}
-				log.Printf("error msg: %v", err)
+				defaultLogger.Error("error msg: %v", err)
 				return nil
 			}
 			return nil

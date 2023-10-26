@@ -2,7 +2,6 @@ package rabbitHalo
 
 import (
 	"fmt"
-	"log"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -18,7 +17,7 @@ func newAmqpConnect(amqpUri string) (conn *AmqpConnection, Err error) {
 	cnt := 0
 	Err = retry(retryMaxTime, func() (err error) {
 		cnt++
-		log.Printf("dail rabbitmq %v times", cnt)
+		defaultLogger.Info("dail rabbitmq %v times", cnt)
 
 		conn, err = amqp.Dial(amqpUri)
 		if err != nil {
@@ -29,7 +28,7 @@ func newAmqpConnect(amqpUri string) (conn *AmqpConnection, Err error) {
 
 	go func() {
 		err := <-conn.NotifyClose(make(chan *amqp.Error))
-		log.Printf("close connection: %v", err)
+		defaultLogger.Info("close connection: %v", err)
 	}()
 
 	return
@@ -67,11 +66,11 @@ func (p *ConnectionPool) AcquireConnection() (conn *Connection, err error) {
 	// }
 
 	p.mu.Lock()
-	// log.Println("==pool lock==")
+	defaultLogger.Info("==pool lock==")
 	defer func() {
 		minIndex, totalScore, listQty := p.strategy.ViewUsageQty()
-		log.Printf("get connection[id=%v]: min=%v totalScore=%v qty=%v\n", conn.Id, minIndex, totalScore, listQty)
-		// log.Println("==pool unlock==")
+		defaultLogger.Info("get connection[id=%v]: min=%v totalScore=%v qty=%v\n", conn.Id, minIndex, totalScore, listQty)
+		defaultLogger.Info("==pool unlock==")
 		p.mu.Unlock()
 	}()
 
@@ -135,13 +134,13 @@ type Connection struct {
 
 func (c *Connection) AcquireChannel() (ch *Channel, err error) {
 	c.mu.Lock()
-	// log.Printf("==conn[id=%v] lock==", c.Id)
+	// defaultLogger.Info("==conn[id=%v] lock==", c.Id)
 	defer func() {
 		minIndex, totalScore, listQty := c.strategy.ViewUsageQty()
-		log.Printf("get channel[id=%v] from conn[id=%v]: min=%v totalScore=%v qty=%v\n", ch.Id, c.Id, minIndex, totalScore, listQty)
-		// log.Printf("get channel[id=%v]: min=%v totalScore=%v qty=%v\n", ch.Id, minIndex, totalScore, listQty)
-		// log.Printf("get channel from conn[id=%v]: min=%v totalScore=%v qty=%v\n", c.Id, minIndex, totalScore, listQty)
-		// log.Println("==conn unlock==")
+		defaultLogger.Info("get channel[id=%v] from conn[id=%v]: min=%v totalScore=%v qty=%v\n", ch.Id, c.Id, minIndex, totalScore, listQty)
+		// defaultLogger.Info("get channel[id=%v]: min=%v totalScore=%v qty=%v\n", ch.Id, minIndex, totalScore, listQty)
+		// defaultLogger.Info("get channel from conn[id=%v]: min=%v totalScore=%v qty=%v\n", c.Id, minIndex, totalScore, listQty)
+		// defaultLogger.Info("==conn unlock==")
 		c.mu.Unlock()
 	}()
 

@@ -2,8 +2,6 @@ package rabbitHalo
 
 import (
 	"context"
-	"log"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -244,12 +242,10 @@ func (mux *MessageMux) DisableGoroutineSafe() {
 //
 
 func handleDefaultConsumerError(next ConsumerFunc) ConsumerFunc {
-	logger := log.New(os.Stderr, "Error: ", log.Ltime|log.Lshortfile|log.LUTC|log.Lmsgprefix)
-
 	return func(ctx context.Context, msg *AmqpMessage) error {
 		err := next(ctx, msg)
 		if err != nil {
-			logger.Printf("default error handle: consumer=%q: key=%q: payload=%q: %v",
+			defaultLogger.Info("default error handle: consumer=%q: key=%q: payload=%q: %v",
 				msg.ConsumerTag,
 				msg.RoutingKey,
 				msg.Body,
