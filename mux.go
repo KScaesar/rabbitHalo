@@ -138,7 +138,7 @@ func (mux *MessageMux) RegisterConsumerFunc(bindingKey string, fn ConsumerFunc) 
 		defer mux.mu.Unlock()
 	}
 
-	if strings.Contains(bindingKey, "*") || strings.Contains(bindingKey, "#") {
+	if isTopicKey(bindingKey) {
 		panic("not allow wildcard symbol")
 	}
 
@@ -159,6 +159,8 @@ func (mux *MessageMux) RemoveConsumerFunc(key string) {
 	delete(mux.cNormalHandlers, key)
 }
 
+// RegisterConsumerFuncByTopic
+// If the bindingKey contains a wildcard string * or #, use this function to return the index for remove handler.
 func (mux *MessageMux) RegisterConsumerFuncByFanout(bindingKey string, fn ConsumerFunc) (index int) {
 	if mux.isGoroutineSafe.Load() {
 		mux.mu.Lock()
@@ -196,30 +198,41 @@ func (mux *MessageMux) RemoveConsumerFuncByFanout(bindingKey string, index ...in
 	delete(mux.cFanoutHandlers, bindingKey)
 }
 
-// RegisterConsumerFuncByTopic
-// Typically, this function is used when the bindingKey includes * or # wildcard.
-// The bindingKey doesn't have an actual effect;
-// it is used for readability to understand which wildcard key RabbitMQ is utilizing.
 func (mux *MessageMux) RegisterConsumerFuncByTopic(bindingKey string, fn ConsumerFunc) (index int) {
 	if mux.isGoroutineSafe.Load() {
 		mux.mu.Lock()
 		defer mux.mu.Unlock()
 	}
 
-	n := len(mux.cWildcardTopicHandlers)
-	mux.cWildcardTopicHandlers = append(mux.cWildcardTopicHandlers, fn)
-	return n
+	if isTopicKey(bindingKey) {
+		n := len(mux.cWildcardTopicHandlers)
+		mux.cWildcardTopicHandlers = append(mux.cWildcardTopicHandlers, fn)
+		return n
+	}
+
+	mux.RegisterConsumerFunc(bindingKey, fn)
+	return -1
 }
 
 // RemoveConsumerFuncByTopic
 // The index corresponds to the return value of RegisterConsumerFuncByTopic.
-func (mux *MessageMux) RemoveConsumerFuncByTopic(index int) {
+func (mux *MessageMux) RemoveConsumerFuncByTopic(bindingKey string, index ...int) {
 	if mux.isGoroutineSafe.Load() {
 		mux.mu.Lock()
 		defer mux.mu.Unlock()
 	}
 
-	mux.cWildcardTopicHandlers = append(mux.cWildcardTopicHandlers[:index], mux.cWildcardTopicHandlers[index+1:]...)
+	if isTopicKey(bindingKey) {
+		idx := index[0]
+		mux.cWildcardTopicHandlers = append(mux.cWildcardTopicHandlers[:idx], mux.cWildcardTopicHandlers[idx+1:]...)
+		return
+	}
+
+	mux.RemoveConsumerFunc(bindingKey)
+}
+
+func isTopicKey(bindingKey string) bool {
+	return strings.Contains(bindingKey, "*") || strings.Contains(bindingKey, "#")
 }
 
 func (mux *MessageMux) EnableGoroutineSafe() {
