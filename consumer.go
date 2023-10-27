@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-func newConsumer(queueName string, consumerId string, ch *Channel, fn ConsumerFunc, useParam ...UseConsumerParam) (*Consumer, error) {
+func newAmqpConsumer(ch *Channel, queueName string, consumerId string, useParam []UseConsumerParam) (<-chan AmqpMessage, error) {
 	var param AmqpConsumeParam
 	for _, replace := range useParam {
 		replace(&param)
@@ -29,6 +29,15 @@ func newConsumer(queueName string, consumerId string, ch *Channel, fn ConsumerFu
 	err = ch.Qos(param.QosPrefetchCount, param.QosPrefetchSize, param.QosGlobal)
 	if err != nil {
 		return nil, fmt.Errorf("amqp qos: %w", err)
+	}
+
+	return amqpConsumer, nil
+}
+
+func newConsumer(queueName string, consumerId string, ch *Channel, fn ConsumerFunc, useParam ...UseConsumerParam) (*Consumer, error) {
+	amqpConsumer, err := newAmqpConsumer(ch, queueName, consumerId, useParam)
+	if err != nil {
+		return nil, err
 	}
 
 	consumer := &Consumer{
@@ -57,11 +66,22 @@ func (c *Consumer) SyncServe() {
 }
 
 func (c *Consumer) SyncServeWithContext(ctx context.Context) {
-	for d := range c.amqpConsumer {
-		msg := &d
-		c.messageHandler(ctx, msg)
+	defer close(c.done)
+
+	for {
+		select {
+		case <-ctx.Done():
+			defaultLogger.Info("Consumer.SyncServeWithContext: ctx done: %v", ctx.Err())
+			return
+
+		case d, ok := <-c.amqpConsumer:
+			if !ok {
+				return
+			}
+			msg := &d
+			c.messageHandler(ctx, msg)
+		}
 	}
-	close(c.done)
 }
 
 func (c *Consumer) Shutdown() error {
