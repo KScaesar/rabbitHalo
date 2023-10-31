@@ -137,7 +137,10 @@ func (mux *MessageMux) RegisterConsumerFunc(bindingKey string, fn ConsumerFunc) 
 		mux.mu.Lock()
 		defer mux.mu.Unlock()
 	}
+	mux.registerConsumerFunc(bindingKey, fn)
+}
 
+func (mux *MessageMux) registerConsumerFunc(bindingKey string, fn ConsumerFunc) {
 	if isTopicKey(bindingKey) {
 		panic("not allow wildcard symbol")
 	}
@@ -210,7 +213,7 @@ func (mux *MessageMux) RegisterConsumerFuncByTopic(bindingKey string, fn Consume
 		return n
 	}
 
-	mux.RegisterConsumerFunc(bindingKey, fn)
+	mux.registerConsumerFunc(bindingKey, fn)
 	return -1
 }
 
