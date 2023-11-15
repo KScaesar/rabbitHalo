@@ -2,9 +2,7 @@ package rabbitHalo
 
 import (
 	"context"
-	"strings"
 	"sync"
-	"sync/atomic"
 )
 
 func NewMessageMux(muxSize ...int) *MessageMux {
@@ -17,35 +15,17 @@ func NewMessageMux(muxSize ...int) *MessageMux {
 	}
 
 	mux := &MessageMux{
-		cNormalHandlers:         make(map[string]ConsumerFunc, size),
-		cFanoutHandlers:         make(map[string]ConsumerFunc, size),
-		cBlankKeyFanoutHandlers: make([]ConsumerFunc, 0, size),
-		cWildcardTopicHandlers:  make([]ConsumerFunc, 0, size),
+		consumerHandlers:             make(map[string]ConsumerFunc, size),
+		consumerHandlersByDynamicKey: make([]ConsumerFunc, 0, size),
 	}
 	return mux
 }
 
 type MessageMux struct {
-	mu              sync.RWMutex
-	isGoroutineSafe atomic.Bool
-
-	// Due to the highly flexible RoutingKey mechanism in RabbitMQ,
-	// RoutingKey and BindingKey may not be an exact match.
-	//
-	// However, this mux (multiplexer) can only achieve "string exact" comparison,
-	// and it relies on handler functions to compare keys.
-	// Utilizing the Chain of Responsibility Pattern and StopNextFunc, it seeks the appropriate handler.
-	//
-	// The following RoutingKey searching efficiency is low,
-	// and it may be considered to not use mux to register handler functions.
-	//
-	// 1. For topic kind, which include wildcards like *.*.*
-	// 2. For fanout kind, RabbitMQ allows matching any format of RoutingKey.
-	cNormalHandlers         map[string]ConsumerFunc // RoutingKey:Func
-	cFanoutHandlers         map[string]ConsumerFunc // RoutingKey:Func
-	cBlankKeyFanoutHandlers []ConsumerFunc
-	cWildcardTopicHandlers  []ConsumerFunc
-	consumerChain           ConsumerChain
+	mu                           sync.RWMutex
+	consumerHandlers             map[string]ConsumerFunc // RoutingKey:Func
+	consumerHandlersByDynamicKey []ConsumerFunc
+	consumerChain                ConsumerChain
 }
 
 func (mux *MessageMux) ServeConsume(ctx context.Context, msg *AmqpMessage) error {
@@ -53,46 +33,23 @@ func (mux *MessageMux) ServeConsume(ctx context.Context, msg *AmqpMessage) error
 }
 
 func (mux *MessageMux) serveConsume(ctx context.Context, msg *AmqpMessage) error {
-	if mux.isGoroutineSafe.Load() {
-		mux.mu.Lock()
-		defer mux.mu.Unlock()
-	}
-	notMatchKeyHandler := func(_ context.Context, _ *AmqpMessage) error { return ErrNotMatchRoutingKey }
+	mux.mu.Lock()
+	defer mux.mu.Unlock()
 
-	routingKey := msg.RoutingKey
-	handler, ok := mux.cNormalHandlers[routingKey]
+	key := msg.RoutingKey
+	handler, ok := mux.consumerHandlers[key]
 	if ok {
 		return mux.consumerChain.Link(handler)(ctx, msg)
 	}
 
-	if routingKey == "" {
-		for _, fanoutHandler := range mux.cBlankKeyFanoutHandlers {
-			err := mux.consumerChain.Link(fanoutHandler)(ctx, msg)
-			if err != nil || isNextFuncStopped(ctx) {
-				return err
-			}
-		}
-		return mux.consumerChain.LinkError(notMatchKeyHandler)(ctx, msg)
-	}
-
-	if fanoutHandler, exist := mux.cFanoutHandlers[routingKey]; exist {
-		return mux.consumerChain.Link(fanoutHandler)(ctx, msg)
-	}
-
-	for _, topicHandler := range mux.cWildcardTopicHandlers {
-		err := mux.consumerChain.Link(topicHandler)(ctx, msg)
-		if err != nil || isNextFuncStopped(ctx) {
+	for _, fn := range mux.consumerHandlersByDynamicKey {
+		err := mux.consumerChain.Link(fn)(ctx, msg)
+		if err != nil || isStoppedNext(ctx) {
 			return err
 		}
 	}
 
-	for _, fanoutHandler := range mux.cBlankKeyFanoutHandlers {
-		err := mux.consumerChain.Link(fanoutHandler)(ctx, msg)
-		if err != nil || isNextFuncStopped(ctx) {
-			return err
-		}
-	}
-
+	notMatchKeyHandler := func(_ context.Context, _ *AmqpMessage) error { return ErrNotMatchRoutingKey }
 	return mux.consumerChain.LinkError(notMatchKeyHandler)(ctx, msg)
 }
 
@@ -104,146 +61,85 @@ func (mux *MessageMux) serveConsume(ctx context.Context, msg *AmqpMessage) error
 // 'before' will be executed first, and then 'after' will be executed last.
 //
 //	chain[0] = func(next ConsumerFunc) ConsumerFunc {
-//	       return func(ctx context.Context, msg *AmqpMessage) error {
+//	       return func(defaultCtx context.Context, msg *AmqpMessage) error {
 //	           // before
-//	           err := next(ctx, msg)
+//	           err := next(defaultCtx, msg)
 //	           // after
 //	           return err
 //	       }
 //	   }
 func (mux *MessageMux) AddConsumerFeatureChain(chain ...ConsumerDecorator) *MessageMux {
-	if mux.isGoroutineSafe.Load() {
-		mux.mu.Lock()
-		defer mux.mu.Unlock()
-	}
+	mux.mu.Lock()
+	defer mux.mu.Unlock()
 
 	mux.consumerChain.AddFeature(chain...)
 	return mux
 }
 
 func (mux *MessageMux) AddConsumerErrorChain(chain ...ConsumerDecorator) *MessageMux {
-	if mux.isGoroutineSafe.Load() {
-		mux.mu.Lock()
-		defer mux.mu.Unlock()
-	}
+	mux.mu.Lock()
+	defer mux.mu.Unlock()
 
 	mux.consumerChain.AddError(chain...)
 	return mux
 }
 
-// RegisterConsumerFunc is suitable for use when the RoutingKey and BindingKey are an exact match.
-func (mux *MessageMux) RegisterConsumerFunc(bindingKey string, fn ConsumerFunc) {
-	if mux.isGoroutineSafe.Load() {
-		mux.mu.Lock()
-		defer mux.mu.Unlock()
-	}
-	mux.registerConsumerFunc(bindingKey, fn)
-}
+func (mux *MessageMux) RegisterConsumerFunc(key AmqpKey, fn ConsumerFunc) {
+	mux.mu.Lock()
+	defer mux.mu.Unlock()
 
-func (mux *MessageMux) registerConsumerFunc(bindingKey string, fn ConsumerFunc) {
-	if isTopicKey(bindingKey) {
-		panic("not allow wildcard symbol")
+	routingKey := key.RoutingKey()
+	if routingKey == "" {
+		panic("RoutingKey is empty")
 	}
-
-	_, ok := mux.cNormalHandlers[bindingKey]
+	if routingKey == DynamicRoutingKey {
+		panic("not allow DynamicRoutingKey")
+	}
+	_, ok := mux.consumerHandlers[routingKey]
 	if ok {
-		panic("duplicate key: " + bindingKey)
+		panic("duplicate key: " + routingKey)
 	}
 
-	mux.cNormalHandlers[bindingKey] = fn
+	mux.consumerHandlers[routingKey] = fn
 }
 
-func (mux *MessageMux) RemoveConsumerFunc(key string) {
-	if mux.isGoroutineSafe.Load() {
-		mux.mu.Lock()
-		defer mux.mu.Unlock()
-	}
+func (mux *MessageMux) RemoveConsumerFunc(key AmqpKey) {
+	mux.mu.Lock()
+	defer mux.mu.Unlock()
 
-	delete(mux.cNormalHandlers, key)
+	delete(mux.consumerHandlers, key.RoutingKey())
 }
 
-// RegisterConsumerFuncByTopic
-// If the bindingKey contains a wildcard string * or #, use this function to return the index for remove handler.
-func (mux *MessageMux) RegisterConsumerFuncByFanout(bindingKey string, fn ConsumerFunc) (index int) {
-	if mux.isGoroutineSafe.Load() {
-		mux.mu.Lock()
-		defer mux.mu.Unlock()
+// RegisterConsumerFuncByDynamic
+// 使用場景:
+// 無法在伺服器啟動當下決定的 key
+func (mux *MessageMux) RegisterConsumerFuncByDynamic(key AmqpKey, fn ConsumerFunc) (index int) {
+	mux.mu.Lock()
+	defer mux.mu.Unlock()
+
+	routingKey := key.RoutingKey()
+	if routingKey == "" {
+		panic("RoutingKey is empty")
+	}
+	if routingKey != DynamicRoutingKey {
+		panic("routingKey must is DynamicRoutingKey")
 	}
 
-	if bindingKey == "" {
-		n := len(mux.cBlankKeyFanoutHandlers)
-		mux.cBlankKeyFanoutHandlers = append(mux.cBlankKeyFanoutHandlers, fn)
-		return n
-	}
-
-	_, ok := mux.cFanoutHandlers[bindingKey]
-	if ok {
-		panic("duplicate key: " + bindingKey)
-	}
-
-	mux.cFanoutHandlers[bindingKey] = fn
-	return -1
+	n := len(mux.consumerHandlersByDynamicKey)
+	mux.consumerHandlersByDynamicKey = append(mux.consumerHandlersByDynamicKey, fn)
+	return n
 }
 
-// RemoveConsumerFuncByFanout
-// The index corresponds to the return value of RegisterConsumerFuncByFanout.
-func (mux *MessageMux) RemoveConsumerFuncByFanout(bindingKey string, index ...int) {
-	if mux.isGoroutineSafe.Load() {
-		mux.mu.Lock()
-		defer mux.mu.Unlock()
-	}
+// RemoveConsumerFuncByDynamic
+// The idx corresponds to the return value of RegisterConsumerFuncByDynamic.
+func (mux *MessageMux) RemoveConsumerFuncByDynamic(idx int) {
+	mux.mu.Lock()
+	defer mux.mu.Unlock()
 
-	if bindingKey == "" {
-		idx := index[0]
-		mux.cBlankKeyFanoutHandlers = append(mux.cBlankKeyFanoutHandlers[:idx], mux.cBlankKeyFanoutHandlers[idx+1:]...)
+	if idx >= len(mux.consumerHandlersByDynamicKey) {
 		return
 	}
-	delete(mux.cFanoutHandlers, bindingKey)
-}
-
-func (mux *MessageMux) RegisterConsumerFuncByTopic(bindingKey string, fn ConsumerFunc) (index int) {
-	if mux.isGoroutineSafe.Load() {
-		mux.mu.Lock()
-		defer mux.mu.Unlock()
-	}
-
-	if isTopicKey(bindingKey) {
-		n := len(mux.cWildcardTopicHandlers)
-		mux.cWildcardTopicHandlers = append(mux.cWildcardTopicHandlers, fn)
-		return n
-	}
-
-	mux.registerConsumerFunc(bindingKey, fn)
-	return -1
-}
-
-// RemoveConsumerFuncByTopic
-// The index corresponds to the return value of RegisterConsumerFuncByTopic.
-func (mux *MessageMux) RemoveConsumerFuncByTopic(bindingKey string, index ...int) {
-	if mux.isGoroutineSafe.Load() {
-		mux.mu.Lock()
-		defer mux.mu.Unlock()
-	}
-
-	if isTopicKey(bindingKey) {
-		idx := index[0]
-		mux.cWildcardTopicHandlers = append(mux.cWildcardTopicHandlers[:idx], mux.cWildcardTopicHandlers[idx+1:]...)
-		return
-	}
-
-	mux.RemoveConsumerFunc(bindingKey)
-}
-
-func isTopicKey(bindingKey string) bool {
-	return strings.Contains(bindingKey, "*") || strings.Contains(bindingKey, "#")
-}
-
-func (mux *MessageMux) EnableGoroutineSafe() {
-	mux.isGoroutineSafe.Store(true)
-}
-
-func (mux *MessageMux) DisableGoroutineSafe() {
-	mux.isGoroutineSafe.Store(false)
+	mux.consumerHandlersByDynamicKey = append(mux.consumerHandlersByDynamicKey[:idx], mux.consumerHandlersByDynamicKey[idx+1:]...)
 }
 
 //
@@ -251,8 +147,15 @@ func (mux *MessageMux) DisableGoroutineSafe() {
 func handleDefaultConsumerError(next ConsumerFunc) ConsumerFunc {
 	return func(ctx context.Context, msg *AmqpMessage) error {
 		err := next(ctx, msg)
-		if err != nil {
-			defaultLogger.Info("default error handle: consumer=%q: key=%q: payload=%q: %v",
+		if err == nil {
+			return nil
+		}
+
+		switch {
+		default:
+			msg.Ack(false)
+			defaultLogger.Error("default error handle: msgType=%q: consumer=%q: key=%q: payload=%q: %v",
+				msg.Type,
 				msg.ConsumerTag,
 				msg.RoutingKey,
 				msg.Body,
@@ -260,7 +163,6 @@ func handleDefaultConsumerError(next ConsumerFunc) ConsumerFunc {
 			)
 			return err
 		}
-		return nil
 	}
 }
 
@@ -282,18 +184,17 @@ func contextWithNextChecker(ctx context.Context) context.Context {
 	return context.WithValue(ctx, nextChecker{}, &isStopped)
 }
 
-func isNextFuncStopped(ctx context.Context) bool {
+func isStoppedNext(ctx context.Context) bool {
 	isStopped := ctx.Value(nextChecker{}).(*bool)
 	return *isStopped
 }
 
-// StopNextFunc
-// Due to the flexible RoutingKey mechanism in rabbitmq,
-// it's necessary for handlers to check whether a message belongs to them.
+// MuxStopNext
+// 與 XXXByDynamic 相關函數一起使用, 由 handler 進行確認是否符合 key
 //
-// Use Chain of Responsibility Design Pattern.
-func StopNextFunc(ctx context.Context) {
+// 如果單獨使用 handler, 沒有 mux 註冊
+// 不需要使用 MuxStopNext
+func MuxStopNext(ctx context.Context) {
 	isStopped := ctx.Value(nextChecker{}).(*bool)
 	*isStopped = true
-	return
 }
