@@ -13,9 +13,10 @@ type Logger interface {
 	Error(format string, a ...interface{})
 	Fatal(format string, a ...interface{})
 
-	SetLogLevel(level LogLevel) Logger
+	ShallowCopy() Logger
+	SetLogLevel(level LogLevel)
 	LogLevel() LogLevel
-	SetCallDepth(externalDepth uint) Logger
+	WithCallDepth(externalDepth uint) Logger
 }
 
 type LogLevel uint8
@@ -29,7 +30,7 @@ const (
 )
 
 var (
-	defaultLogger Logger = newLogger(0, LogLevelDebug)
+	defaultLogger Logger = NewLogger(0, LogLevelDebug)
 )
 
 func GlobalLogLevel() LogLevel {
@@ -44,19 +45,18 @@ func DefaultLogger() Logger {
 	return defaultLogger
 }
 
-func newLogger(externalDepth uint, level LogLevel) *stdLogger {
+func NewLogger(externalDepth uint, level LogLevel) stdLogger {
 	flag := log.Ltime | log.LUTC | log.Lmsgprefix | log.Lshortfile
 	internalDepth := 2
-	l := &stdLogger{
-		debug:             log.New(os.Stderr, "[Debug]: ", flag),
-		info:              log.New(os.Stderr, "[Info]: ", flag),
+	return stdLogger{
+		debug:             log.New(os.Stdout, "[Debug]: ", flag),
+		info:              log.New(os.Stdout, "[Info]: ", flag),
 		warn:              log.New(os.Stderr, "[Warn]: ", flag),
 		err:               log.New(os.Stderr, "[Error]: ", flag),
 		fatal:             log.New(os.Stderr, "[Fatal]: ", flag),
 		internalCallDepth: internalDepth + int(externalDepth),
-		logLevel:          level,
+		logLevel:          &level,
 	}
-	return l
 }
 
 type stdLogger struct {
@@ -66,45 +66,49 @@ type stdLogger struct {
 	err               *log.Logger
 	fatal             *log.Logger
 	internalCallDepth int
-	logLevel          LogLevel
+	logLevel          *LogLevel
 }
 
-func (l *stdLogger) Debug(format string, a ...interface{}) {
-	if l.logLevel > LogLevelDebug {
+func (l stdLogger) Debug(format string, a ...interface{}) {
+	if *l.logLevel > LogLevelDebug {
 		return
 	}
 	l.debug.Output(l.internalCallDepth, fmt.Sprintf(format, a...))
 }
 
-func (l *stdLogger) Info(format string, a ...interface{}) {
-	if l.logLevel > LogLevelInfo {
+func (l stdLogger) Info(format string, a ...interface{}) {
+	if *l.logLevel > LogLevelInfo {
 		return
 	}
 	l.info.Output(l.internalCallDepth, fmt.Sprintf(format, a...))
 }
 
-func (l *stdLogger) Warn(format string, a ...interface{}) {
-	if l.logLevel > LogLevelWarn {
+func (l stdLogger) Warn(format string, a ...interface{}) {
+	if *l.logLevel > LogLevelWarn {
 		return
 	}
 	l.warn.Output(l.internalCallDepth, fmt.Sprintf(format, a...))
 }
 
-func (l *stdLogger) Error(format string, a ...interface{}) {
-	if l.logLevel > LogLevelError {
+func (l stdLogger) Error(format string, a ...interface{}) {
+	if *l.logLevel > LogLevelError {
 		return
 	}
 	l.err.Output(l.internalCallDepth, fmt.Sprintf(format, a...))
 }
 
-func (l *stdLogger) Fatal(format string, a ...interface{}) {
-	if l.logLevel > LogLevelFatal {
+func (l stdLogger) Fatal(format string, a ...interface{}) {
+	if *l.logLevel > LogLevelFatal {
 		return
 	}
 	l.fatal.Output(l.internalCallDepth, fmt.Sprintf(format, a...))
 }
 
-func (l *stdLogger) shallowCopy() stdLogger {
+func (l stdLogger) ShallowCopy() Logger {
+	return l.shallowCopy()
+}
+
+func (l stdLogger) shallowCopy() stdLogger {
 	return stdLogger{
 		debug:             l.debug,
 		info:              l.info,
@@ -116,18 +120,16 @@ func (l *stdLogger) shallowCopy() stdLogger {
 	}
 }
 
-func (l *stdLogger) SetLogLevel(level LogLevel) Logger {
-	l2 := l.shallowCopy()
-	l2.logLevel = level
-	return &l2
+func (l stdLogger) SetLogLevel(level LogLevel) {
+	*l.logLevel = level
 }
 
-func (l *stdLogger) LogLevel() LogLevel {
-	return l.logLevel
+func (l stdLogger) LogLevel() LogLevel {
+	return *l.logLevel
 }
 
-func (l *stdLogger) SetCallDepth(externalDepth uint) Logger {
+func (l stdLogger) WithCallDepth(externalDepth uint) Logger {
 	l2 := l.shallowCopy()
 	l2.internalCallDepth += int(externalDepth)
-	return &l2
+	return l2
 }
