@@ -5,5 +5,6 @@ import (
 )
 
 var (
-	ErrNotMatchRoutingKey = errors.New("not match routing key")
+	ErrNotFoundHandler = errors.New("not found handler")
+	ErrResourceClosed  = errors.New("resource closed")
 )

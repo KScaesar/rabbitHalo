@@ -3,16 +3,13 @@ package rabbitHalo
 type AmqpKey interface {
 	RoutingKey() string
 	BindingKey() string
-	KeyKind() string
 }
 
-// DynamicRoutingKey
-// 使用場景:
-// 無法在伺服器啟動當下決定的 key, 後續使用 MuxStopNext 在 handler 判斷是否滿足 key 路由
-//
-// 事實上, DynamicRoutingKey 都可以透過自己滿足 AmqpKey 來完成路由配對,
-// DynamicRoutingKey 主要是提供一個簡單的做法.
-const DynamicRoutingKey = "1qaz2wsx-DynamicKey-0p;/9ol."
+// ToolRoutingKey
+// 使用場景: 向 mux 註冊 handler 的時候,
+// 不能決定 routing key 會是什麼形式,
+// 可以用此變數當成替代名稱.
+const ToolRoutingKey = "ToolKey-1qaz2wsx"
 
 //
 
@@ -33,10 +30,6 @@ func (t TopicKey) BindingKey() string {
 	return t.bindingKey
 }
 
-func (t TopicKey) KeyKind() string {
-	return "topic"
-}
-
 //
 
 func NewKeyDirect(key string) DirectKey {
@@ -55,10 +48,6 @@ func (d DirectKey) BindingKey() string {
 	return d.key
 }
 
-func (d DirectKey) KeyKind() string {
-	return "direct"
-}
-
 //
 
 func NewKeyFanout(key string) FanoutKey {
@@ -75,8 +64,4 @@ func (f FanoutKey) RoutingKey() string {
 
 func (f FanoutKey) BindingKey() string {
 	return ""
-}
-
-func (f FanoutKey) KeyKind() string {
-	return "fanout"
 }

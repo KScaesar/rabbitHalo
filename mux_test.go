@@ -8,19 +8,19 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestStopNextFunc_RegisterConsumerFunc_and_RegisterConsumerFuncByDynamic_success(t *testing.T) {
+func TestStopNextFunc_RegisterConsumerFastFunc_and_RegisterConsumerSlowFunc_success(t *testing.T) {
 	// arrange
 	mux := NewMessageMux()
 	var recordTasks []string
 
 	key1 := NewKeyTopic("system_design", "system_design")
-	mux.RegisterConsumerFunc(key1, func(ctx context.Context, msg *AmqpMessage) error {
+	mux.RegisterConsumerFastHook(key1, func(ctx context.Context, msg *AmqpMessage) error {
 		recordTasks = append(recordTasks, msg.RoutingKey+"_ok!")
 		return nil
 	})
 
 	key2 := NewKeyDirect("database")
-	mux.RegisterConsumerFunc(key2, func(ctx context.Context, msg *AmqpMessage) error {
+	mux.RegisterConsumerFastHook(key2, func(ctx context.Context, msg *AmqpMessage) error {
 		recordTasks = append(recordTasks, msg.RoutingKey+"_ok!")
 		return nil
 	})
@@ -28,25 +28,26 @@ func TestStopNextFunc_RegisterConsumerFunc_and_RegisterConsumerFuncByDynamic_suc
 	bindingKey3 := "order.*.user"
 	routingKey3a := "order.notebook:'xps'.user"
 	routingKey3b := "order.notebook:'m1'.user"
-	key3 := NewKeyTopic(DynamicRoutingKey, bindingKey3)
-	mux.RegisterConsumerFuncByDynamic(key3, func(ctx context.Context, msg *AmqpMessage) error {
-		if msg.RoutingKey != routingKey3a {
+	key3 := NewKeyTopic(routingKey3a, bindingKey3)
+	mux.RegisterConsumerSlowHook(key3, func(ctx context.Context, msg *AmqpMessage) error {
+		if msg.RoutingKey != key3.RoutingKey() {
 			return nil
 		}
-		MuxStopNext(ctx)
+		AckMessage(ctx)
 
 		recordTasks = append(recordTasks, msg.RoutingKey+"_ok!")
 		return nil
 	})
 
 	key4 := NewKeyFanout("leetcode")
-	mux.RegisterConsumerFunc(key4, func(ctx context.Context, msg *AmqpMessage) error {
+	mux.RegisterConsumerSlowHook(key4, func(ctx context.Context, msg *AmqpMessage) error {
+		AckMessage(ctx)
 		recordTasks = append(recordTasks, msg.RoutingKey+"_ok!")
 		return nil
 	})
 
 	key5 := NewKeyDirect("gopher")
-	mux.RegisterConsumerFunc(key5, func(ctx context.Context, msg *AmqpMessage) error {
+	mux.RegisterConsumerFastHook(key5, func(ctx context.Context, msg *AmqpMessage) error {
 		recordTasks = append(recordTasks, msg.RoutingKey+"_ok!")
 		return nil
 	})
@@ -55,15 +56,24 @@ func TestStopNextFunc_RegisterConsumerFunc_and_RegisterConsumerFuncByDynamic_suc
 	mux.AddConsumerErrorChain(func(next ConsumerFunc) ConsumerFunc {
 		return func(ctx context.Context, msg *AmqpMessage) error {
 			err := next(ctx, msg)
-			if err != nil {
-				if errors.Is(err, ErrNotMatchRoutingKey) {
-					actualNotMatchKeys = append(actualNotMatchKeys, msg.RoutingKey)
-					return nil
-				}
-				defaultLogger.Error("error msg: %v", err)
+			if err == nil {
 				return nil
 			}
-			return nil
+
+			switch {
+			case errors.Is(err, ErrNotFoundHandler):
+				msg.Ack(false)
+				actualNotMatchKeys = append(actualNotMatchKeys, msg.RoutingKey)
+				return err
+
+			default:
+				msg.Ack(false)
+				defaultLogger.Error(
+					"default error handle: msgType=%q: consumer=%q: key=%q: payload=%q: %v",
+					msg.Type, msg.ConsumerTag, msg.RoutingKey, msg.Body, err,
+				)
+				return err
+			}
 		}
 	})
 
@@ -129,11 +139,11 @@ func TestMessageMux_RegisterConsumerFunc_duplicate_handler_register_and_remove_s
 	}()
 
 	// action
-	mux.RegisterConsumerFunc(key, fn)
-	mux.RemoveConsumerFunc(key)
+	mux.RegisterConsumerFastHook(key, fn)
+	mux.RemoveConsumerFastHook(key)
 
-	mux.RegisterConsumerFunc(key, fn)
-	mux.RemoveConsumerFunc(key)
+	mux.RegisterConsumerFastHook(key, fn)
+	mux.RemoveConsumerFastHook(key)
 
-	mux.RegisterConsumerFunc(key, fn)
+	mux.RegisterConsumerFastHook(key, fn)
 }

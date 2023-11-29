@@ -20,15 +20,37 @@ type ConsumerChain struct {
 	featureChain []ConsumerDecorator
 }
 
-// Link The execution order between baseFn and decorator can be referenced in the test file.
-func (c *ConsumerChain) Link(baseFn ConsumerFunc) ConsumerFunc {
+func (c *ConsumerChain) LinkAll(fnAll []ConsumerFunc, isStop func() bool) ConsumerFunc {
+	featureFn := func(ctx context.Context, msg *AmqpMessage) (Err error) {
+		for _, fn := range fnAll {
+			// 即使遇到錯誤也不停止, 直到符合條件
+			err := c.LinkFeature(fn)(ctx, msg)
+			if isStop() {
+				return err
+			}
+			if err != nil {
+				Err = err
+			}
+		}
+		// 如果所有消費者都不滿足停止條件, 只記錄最後一個錯誤
+		return
+	}
+
+	// 為了解決多個 handler 發生錯誤
+	// amqp.ack 可能被執行多次
+	// 所以單獨把錯誤處理額外執行
+	return c.LinkError(featureFn)
+}
+
+// Link 執行順序參考範例 https://go.dev/play/p/I9cK-VvKjzi
+func (c *ConsumerChain) Link(fn ConsumerFunc) ConsumerFunc {
 	if len(c.errorChain) == 0 {
 		c.errorChain = []ConsumerDecorator{handleDefaultConsumerError}
 	}
 	all := make([]ConsumerDecorator, 0, len(c.errorChain)+len(c.featureChain))
 	all = append(all, c.errorChain...)
 	all = append(all, c.featureChain...)
-	return LinkFuncAndChain(baseFn, all...)
+	return LinkFuncAndChain(fn, all...)
 }
 
 func (c *ConsumerChain) LinkError(fn ConsumerFunc) ConsumerFunc {
