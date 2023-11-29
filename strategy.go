@@ -93,8 +93,8 @@ func (s *MinUsageRateStrategy) UpdateByAcquire() (targetIndex int) {
 		return prev
 	}
 
-	next := roundRobinStrategy(s.minIndex, s.maxLen)
-	s.minIndex = next
+	nextIndex := roundRobinStrategy(s.minIndex, s.maxLen)
+	s.minIndex = nextIndex
 	s.currentLen++
 	return prev
 }
@@ -128,30 +128,4 @@ func (s *MinUsageRateStrategy) InitChildStrategy(maxLen int) {
 
 func (s *MinUsageRateStrategy) SetChildStrategy(id int, childStrategy *MinUsageRateStrategy) {
 	s.childUsageRate[id] = childStrategy
-}
-
-func lazyNewResource[T any](strategy *MinUsageRateStrategy, resourceAll []T, factory func(id int) (T, error)) (T, error) {
-	if strategy.reachMaxLen() { // 如果先更新後查詢, 狀態判斷會有錯誤
-		// log.Println("reuse resource")
-		targetIndex := strategy.UpdateByAcquire()
-		return resourceAll[targetIndex], nil
-	}
-
-	// log.Println("lazy new")
-	targetIndex := strategy.UpdateByAcquire()
-	resource, err := factory(targetIndex)
-	if err != nil {
-		return resource, err
-	}
-	resourceAll[targetIndex] = resource
-	return resource, nil
-}
-
-func roundRobinStrategy(cursor int, maxLen int) (nextIndex int) {
-	cursor++
-	if cursor >= maxLen {
-		// cursor = cursor % maxLen
-		cursor = maxLen - 1
-	}
-	return cursor
 }

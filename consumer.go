@@ -3,19 +3,19 @@ package rabbitHalo
 import (
 	"context"
 	"fmt"
-	"sync"
+	"sync/atomic"
+	"time"
 )
 
-func newAmqpConsumer(ch *Channel, queueName string, consumerId string, useParam []UseConsumerParam) (<-chan AmqpMessage, error) {
+func newAmqpConsumer(ch *Channel, useParam []UseAmqpConsumerParam) (AmqpConsumer, AmqpConsumeParam, error) {
 	var param AmqpConsumeParam
 	for _, replace := range useParam {
 		replace(&param)
 	}
 
-	defaultLogger.Info("starting Consume (consumer tag %q)", consumerId)
-	amqpConsumer, err := ch.Consume(
-		queueName,
-		consumerId,
+	amqpConsumer, err := ch.amqpCh.Consume(
+		param.QueueName,
+		param.ConsumerName,
 		param.AutoAck,
 		param.Exclusive,
 		param.NoLocal,
@@ -23,42 +23,85 @@ func newAmqpConsumer(ch *Channel, queueName string, consumerId string, useParam 
 		param.Args,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("amqp consume: %w", err)
+		return nil, AmqpConsumeParam{}, fmt.Errorf("new amqp consumer=%q: %w", param.ConsumerName, err)
 	}
 
-	err = ch.Qos(param.QosPrefetchCount, param.QosPrefetchSize, param.QosGlobal)
+	err = ch.amqpCh.Qos(param.QosPrefetchCount, param.QosPrefetchSize, param.QosGlobal)
 	if err != nil {
-		return nil, fmt.Errorf("amqp qos: %w", err)
+		return nil, AmqpConsumeParam{}, fmt.Errorf("setup Qos: %v", err)
 	}
 
-	return amqpConsumer, nil
+	return amqpConsumer, param, nil
 }
 
-func newConsumer(queueName string, consumerId string, ch *Channel, fn ConsumerFunc, useParam ...UseConsumerParam) (*Consumer, error) {
-	amqpConsumer, err := newAmqpConsumer(ch, queueName, consumerId, useParam)
-	if err != nil {
-		return nil, err
+func newConsumer(ch *Channel, fn ConsumerFunc, useParam ...UseAmqpConsumerParam) (*Consumer, error) {
+	amqpConsumer, param, err1 := newAmqpConsumer(ch, useParam)
+	if err1 != nil {
+		return nil, err1
 	}
 
 	consumer := &Consumer{
-		Parent:         ch,
-		queueName:      queueName,
-		messageHandler: fn,
-		amqpConsumer:   amqpConsumer,
-		Id:             consumerId,
-		done:           make(chan struct{}),
+		Id:           param.ConsumerName,
+		parent:       ch,
+		queueName:    param.QueueName,
+		messageFunc:  fn,
+		AmqpConsumer: amqpConsumer,
 	}
+
+	consumer.unlimitedRetryAmqpConsumer = func(ctx context.Context) {
+		var unlimited time.Duration = 0
+		retry(unlimited, "retryAmqpConsumer: "+consumer.Id, func() error {
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+				// 如果 exchange, queue 是永久存在的,
+				// 不需要 setRebuilder, 可以不使用 TopologyRebuilder
+				rebuilder := consumer.rebuilder
+				if rebuilder != nil {
+					err := rebuilder.rebuildAction(consumer.parent)
+					if err != nil {
+						return err
+					}
+				}
+
+				consumer.parent.mu.Lock()
+				defer consumer.parent.mu.Unlock()
+
+				if consumer.isClosed.Load() {
+					return nil
+				}
+
+				amqpConsume, _, err := newAmqpConsumer(consumer.parent, useParam)
+				if err != nil {
+					return err
+				}
+				consumer.AmqpConsumer = amqpConsume
+			}
+			return nil
+		})
+	}
+
 	return consumer, nil
 }
 
 type Consumer struct {
-	Id             string
-	messageHandler ConsumerFunc
-	amqpConsumer   AmqpConsumer
-	done           chan struct{}
+	AmqpConsumer               AmqpConsumer
+	unlimitedRetryAmqpConsumer func(ctx context.Context)
+	rebuilder                  *TopologyRebuilder
+	isClosed                   atomic.Bool
 
-	Parent    *Channel
-	queueName string
+	Id          string
+	queueName   string
+	parent      *Channel
+	messageFunc ConsumerFunc
+
+	mqClose      context.Context
+	commandClose func()
+}
+
+func (c *Consumer) setRebuilder(b *TopologyRebuilder) {
+	c.rebuilder = b
 }
 
 func (c *Consumer) SyncServe() {
@@ -66,77 +109,75 @@ func (c *Consumer) SyncServe() {
 }
 
 func (c *Consumer) SyncServeWithContext(ctx context.Context) {
-	defer close(c.done)
+	withCancel, cancelFunc := context.WithCancel(ctx)
+	c.mqClose = withCancel
+	c.commandClose = cancelFunc
 
 	for {
-		select {
-		case <-ctx.Done():
-			defaultLogger.Info("Consumer.SyncServeWithContext: ctx done: %v", ctx.Err())
-			return
-
-		case d, ok := <-c.amqpConsumer:
-			if !ok {
+		defaultLogger.Info("consumer=%q serve start", c.Id)
+	Consume:
+		for {
+			select {
+			case <-c.mqClose.Done():
+				c.commandClose()
 				return
+			default:
 			}
-			msg := &d
-			c.messageHandler(ctx, msg)
+
+			select {
+			case <-c.mqClose.Done():
+				c.commandClose()
+				return
+
+			case d, ok := <-c.AmqpConsumer:
+				if !ok {
+					defaultLogger.Debug("consumer=%q close", c.Id)
+					break Consume
+				}
+				msg := &d
+				defaultLogger.Info("mq consume=%q key=%q msg_id=%v msg=%q", c.Id, msg.RoutingKey, msg.Headers["msg_id"], string(msg.Body))
+				c.messageFunc(c.mqClose, msg)
+			}
 		}
+		c.unlimitedRetryAmqpConsumer(c.mqClose)
 	}
 }
 
-func (c *Consumer) Shutdown() error {
-	if err := c.Parent.Cancel(c.Id, false); err != nil {
-		return fmt.Errorf("concumer=%v: cancel: %v", c.Id, err)
+func (c *Consumer) CloseConsumer() error {
+	if c.isClosed.Load() {
+		return nil
 	}
-	<-c.done
-	defaultLogger.Info("consumer Shutdown: %v", c.Id)
+	c.isClosed.Store(true)
+	c.commandClose()
+	defaultLogger.Info("consumer=%q close success", c.Id)
 
-	// queue, err := c.Parent.QueueInspect(c.queueName)
-	// if err != nil {
-	// 	return fmt.Errorf("queue=%v: view : %w", c.queueName, err)
-	// }
-	//
+	c.parent.mu.Lock()
+	defer c.parent.mu.Unlock()
 
-	// if queue.Consumers == 0 {
-	// 	err := c.Parent.Close()
-	// 	if err != nil {
-	// 		return fmt.Errorf("close Parent: %v", err)
-	// 	}
-	// 	defaultLogger.Info("Parent close!")
-	// }
-
+	if err := c.parent.amqpCh.Cancel(c.Id, true); err != nil {
+		return fmt.Errorf("cancel consumer=%q: %v", c.Id, err)
+	}
 	return nil
 }
 
-type ConsumerAll []*Consumer
-
-func (all *ConsumerAll) AsyncRun() {
-	for _, consumer := range *all {
-		consumer := consumer
+func AsyncServeConsumerAllWithContext(all []*Consumer, ctx context.Context) {
+	for _, c := range all {
+		consumer := c
 		go func() {
-			consumer.SyncServe()
+			consumer.SyncServeWithContext(ctx)
 		}()
 	}
 }
 
-func (all *ConsumerAll) Stop() {
-	wg := sync.WaitGroup{}
-	for _, consumer := range *all {
-		consumer := consumer
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := consumer.Shutdown()
-			if err != nil {
-				defaultLogger.Error("consumer=%v: Shutdown: %v", consumer.Id, err)
-			}
-		}()
-	}
-	wg.Wait()
-	return
+func AsyncServeConsumerAll(all []*Consumer) {
+	AsyncServeConsumerAllWithContext(all, context.Background())
 }
 
-func (all *ConsumerAll) AddConsumer(cAll ...*Consumer) *ConsumerAll {
-	*all = append(*all, cAll...)
-	return all
+func AsyncCloseConsumerAll(all []*Consumer) {
+	for _, c := range all {
+		consumer := c
+		go func() {
+			consumer.CloseConsumer()
+		}()
+	}
 }

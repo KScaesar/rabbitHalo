@@ -15,118 +15,118 @@ import (
 	"github.com/KScaesar/rabbitHalo"
 )
 
-func syncUseCase(conn *rabbitHalo.Connection, mux *rabbitHalo.MessageMux, maxWorker int) {
+func syncUseCase(client *rabbitHalo.Client, maxWorker int) {
 	go func() {
 		for i := 0; i < maxWorker; i++ {
 			user := "user" + strconv.Itoa(i)
-			SubscribeNotificationByUser(user, conn, mux)
+			testToolSubscribeNotificationByUser(user, client)
 		}
 	}()
 }
 
-func asyncUseCase(conn *rabbitHalo.Connection, mux *rabbitHalo.MessageMux, maxWorker int) {
+func asyncUseCase(client *rabbitHalo.Client, maxWorker int) {
 	for i := 0; i < maxWorker; i++ {
 		i := i
 		go func() {
 			user := "user" + strconv.Itoa(i)
 			// time.Sleep(time.Duration(rand.Int31n(5)) * time.Second)
-			SubscribeNotificationByUser(user, conn, mux)
+			testToolSubscribeNotificationByUser(user, client)
 		}()
 	}
 }
 
-func SubscribeNotificationByUser(user string, conn *rabbitHalo.Connection, mux *rabbitHalo.MessageMux) {
-	ttl := 5 * time.Second
-	queue1 := "group:" + user
-	queue2 := "private:" + user
+func testToolSubscribeNotificationByUser(user string, client *rabbitHalo.Client) {
+	mux := rabbitHalo.NewMessageMux()
+
+	conn, err := client.AcquireConnection()
+	if err != nil {
+		rabbitHalo.DefaultLogger().Fatal("AcquireConnection: %v", err)
+		return
+	}
 
 	channel, err := conn.AcquireChannel()
 	if err != nil {
-		panic(err)
+		rabbitHalo.DefaultLogger().Fatal("AcquireChannel: %v", err)
+		return
 	}
 
-	// queue
+	ttl := 60 * time.Second
+	queue1 := "group." + user
+	queue2 := "private." + user
 
-	const (
+	var (
 		ex1     = "broadcast"
+		key1    = rabbitHalo.NewKeyFanout("fanout.bindKey.invalid")
 		ex1Type = "fanout"
-		key1    = "fanout.bindKey.invalid"
 	)
-	mux.RegisterConsumerFuncByFanout("", printMessage)
-	// mux.RegisterConsumerFuncByFanout(key1, printMessage)
-	_, err1 := channel.CreateQueue(rabbitHalo.SetupDefaultQueue(ex1, ex1Type, queue1, key1), rabbitHalo.SetupTemporaryQueue(ttl))
-	if err1 != nil {
-		rabbitHalo.DefaultLogger().Fatal("%v", err)
-	}
-
-	const (
-		ex2     = "condition"
+	var (
+		ex2 = "condition"
+		// key2    = rabbitHalo.NewKeyTopic("notify.shop.ios.user", "notify.*.*.*")
+		key2    = rabbitHalo.NewKeyTopic("notify.shop.ios.user", "")
 		ex2Type = "topic"
-		key2    = "notify.*.*.*"
 	)
-	mux.RegisterConsumerFuncByTopic("notify.*.*.*", topicPrintMessage)
-	_, err2 := channel.CreateQueue(rabbitHalo.SetupDefaultQueue(ex2, ex2Type, queue1, key2), rabbitHalo.SetupTemporaryQueue(ttl))
-	if err2 != nil {
-		rabbitHalo.DefaultLogger().Fatal("%v", err2)
-	}
-
-	ex3 := "single"
-	ex3Type := "direct"
-	key3 := user
-	mux.RegisterConsumerFunc(key3, printMessage)
-	_, err3 := channel.CreateQueue(rabbitHalo.SetupDefaultQueue(ex3, ex3Type, queue2, key3), rabbitHalo.SetupTemporaryQueue(ttl))
-	if err3 != nil {
-		rabbitHalo.DefaultLogger().Fatal("%v", err3)
-	}
-
-	// consumer
-
+	mux.RegisterConsumerFastHook(key1, printMessageByDynamic)
+	mux.RegisterConsumerSlowHook(key2, topicPrintMessage)
 	consumerName1 := fmt.Sprintf("%v-worker", queue1)
-	consumer1, err := channel.CreateConsumers(queue1, consumerName1, mux.ServeConsume, 2, rabbitHalo.SetupDefaultQos)
+
+	consumer1, err := rabbitHalo.NewTopologyRebuilder(channel).
+		QuicklyBuildExchange(rabbitHalo.DefaultExchangeParam(ex1, ex1Type)).
+		QuicklyBuildQueue(rabbitHalo.DefaultQueueParam(ex1, queue1, key1), rabbitHalo.TemporaryQueueParam(ttl)).
+		QuicklyBuildExchange(rabbitHalo.DefaultExchangeParam(ex2, ex2Type)).
+		QuicklyBuildQueue(rabbitHalo.DefaultQueueParam(ex2, queue1, key2), rabbitHalo.TemporaryQueueParam(ttl)).
+		BuildConsumer(mux.ServeConsume, rabbitHalo.DefaultConsumerParam(queue1, consumerName1))
 	if err != nil {
-		rabbitHalo.DefaultLogger().Fatal("%v", err)
-	}
-	consumerName2 := fmt.Sprintf("%v-worker", queue2)
-	consumer2, err := channel.CreateConsumer(queue2, consumerName2, mux.ServeConsume)
-	if err != nil {
-		rabbitHalo.DefaultLogger().Fatal("%v", err)
+		rabbitHalo.DefaultLogger().Fatal("consumer1: %v", err)
+		return
 	}
 
-	var consumers rabbitHalo.ConsumerAll
-	consumers.
-		AddConsumer(consumer1...).
-		AddConsumer(consumer2).
-		AsyncRun()
+	var (
+		ex3     = "single"
+		key3    = rabbitHalo.NewKeyDirect(user)
+		ex3Type = "direct"
+	)
+	mux.RegisterConsumerFastHook(key3, printMessage)
+	consumerName2 := fmt.Sprintf("%v-worker", queue2)
+
+	consumer2, err := rabbitHalo.NewTopologyRebuilder(channel).
+		QuicklyBuildExchange(rabbitHalo.DefaultExchangeParam(ex3, ex3Type)).
+		QuicklyBuildQueue(rabbitHalo.DefaultQueueParam(ex3, queue2, key3), rabbitHalo.TemporaryQueueParam(ttl)).
+		BuildConsumer(mux.ServeConsume, rabbitHalo.DefaultConsumerParam(queue2, consumerName2))
+	if err != nil {
+		rabbitHalo.DefaultLogger().Fatal("consumer2: %v", err)
+		return
+	}
+
+	consumers := []*rabbitHalo.Consumer{
+		consumer1,
+		consumer2,
+	}
+	rabbitHalo.AsyncServeConsumerAll(consumers)
 
 	go func() {
-		time.Sleep(time.Duration(rand.Int31n(10)) * time.Second)
-		// consumers.Stop()
-		// mux.RemoveConsumerFunc(user)
+		var offset int32 = 60
+		time.Sleep(time.Duration(rand.Int31n(30)+offset) * time.Second)
+		rabbitHalo.AsyncCloseConsumerAll(consumers)
+		channel.CloseChannel()
 	}()
 }
 
 func TestConsumer_Consume(t *testing.T) {
-	pool := rabbitHalo.NewPool("amqp://guest:guest@127.0.0.1:5672", 3, 5)
-	connection, err := pool.AcquireConnection()
+	client, err := rabbitHalo.NewClient("amqp://guest:guest@127.0.0.1:5672", 3, 5)
 	require.NoError(t, err)
-
-	mux := rabbitHalo.NewMessageMux()
 
 	// closeTime := 10 * time.Second
 	closeTime := 10 * time.Minute
 
-	syncUseCase(connection, mux, 3)
-	// asyncUseCase(connection, mux, 30)
+	// syncUseCase(client, 2)
+	asyncUseCase(client, 3)
 
 	time.Sleep(closeTime)
+	err = client.CloseClient()
+	require.NoError(t, err)
 }
 
 func topicPrintMessage(ctx context.Context, d *rabbitHalo.AmqpMessage) error {
-	if d.RoutingKey != "notify.*.*.ios" {
-		return nil
-	}
-	rabbitHalo.StopNextFunc(ctx)
-
 	rabbitHalo.DefaultLogger().Info(
 		"cId=%q: DeliveryTag=[%v]: payload=%q: key=%v",
 		d.ConsumerTag,
@@ -138,12 +138,15 @@ func topicPrintMessage(ctx context.Context, d *rabbitHalo.AmqpMessage) error {
 	return nil
 }
 
-func printMessage(ctx context.Context, d *rabbitHalo.AmqpMessage) error {
-	// if d.RoutingKey != "fanout.bindKey.invalid" {
-	// 	return nil
-	// }
-	// rabbitHalo.StopNextFunc(ctx)
+func printMessageByDynamic(ctx context.Context, d *rabbitHalo.AmqpMessage) error {
+	if d.RoutingKey != "" {
+		return nil
+	}
+	rabbitHalo.AckMessage(ctx)
+	return printMessage(ctx, d)
+}
 
+func printMessage(ctx context.Context, d *rabbitHalo.AmqpMessage) error {
 	rabbitHalo.DefaultLogger().Info(
 		"cId=%q: DeliveryTag=[%v]: payload=%q: key=%v",
 		d.ConsumerTag,
