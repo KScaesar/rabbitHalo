@@ -121,11 +121,20 @@ func (s *MinUsageRateStrategy) notExistChildResource() bool {
 	return s.childUsageRate == nil
 }
 
-// InitChildStrategy 初始化物件的時候呼叫, 所以不需要上鎖
 func (s *MinUsageRateStrategy) InitChildStrategy(maxLen int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.childUsageRate != nil {
+		return
+	}
 	s.childUsageRate = make([]*MinUsageRateStrategy, maxLen)
 }
 
 func (s *MinUsageRateStrategy) SetChildStrategy(id int, childStrategy *MinUsageRateStrategy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.childUsageRate[id] != nil {
+		return
+	}
 	s.childUsageRate[id] = childStrategy
 }

@@ -10,14 +10,10 @@ func NewClient(amqpUri string, connectionMaxQty, channelMaxQty int) (*Client, er
 		strategy:      NewMinUsageRateStrategy(connectionMaxQty),
 	}
 	newConn := func(connId int) (*Connection, error) {
-		connection, err := newConnection(amqpUri, connId, channelMaxQty, client)
-		if err != nil {
-			return nil, err
-		}
-		client.strategy.SetChildStrategy(connection.Id, connection.strategy)
-		return connection, err
+		return newConnection(amqpUri, connId, channelMaxQty, client)
 	}
 	client.newConnection = newConn
+	client.strategy.InitChildStrategy(connectionMaxQty)
 
 	_, err := client.AcquireConnection()
 	if err != nil {

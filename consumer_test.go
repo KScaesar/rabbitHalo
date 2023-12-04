@@ -119,7 +119,7 @@ func TestConsumer_Consume(t *testing.T) {
 	closeTime := 10 * time.Minute
 
 	// syncUseCase(client, 2)
-	asyncUseCase(client, 3)
+	asyncUseCase(client, 50)
 
 	time.Sleep(closeTime)
 	err = client.CloseClient()

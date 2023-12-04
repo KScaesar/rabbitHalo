@@ -125,7 +125,12 @@ func (conn *Connection) AcquireChannel() (ch *Channel, err error) {
 	defer conn.mu.Unlock()
 
 	return lazyNewResource(conn.strategy, conn.channelAll, func(id int) (*Channel, error) {
-		return newChannel(id, conn)
+		channel, err := newChannel(id, conn)
+		if err != nil {
+			return nil, err
+		}
+		conn.parent.strategy.SetChildStrategy(conn.Id, conn.strategy)
+		return channel, nil
 	})
 }
 
