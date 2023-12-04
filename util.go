@@ -47,3 +47,11 @@ func roundRobinStrategy(cursor int, maxLen int) (nextIndex int) {
 	}
 	return cursor
 }
+
+func GetMessageId(msg *AmqpMessage) string {
+	msgId, ok := msg.Headers["msg_id"].(string)
+	if !ok {
+		msgId = ""
+	}
+	return msgId
+}

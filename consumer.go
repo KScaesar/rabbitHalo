@@ -134,8 +134,12 @@ func (c *Consumer) SyncServeWithContext(ctx context.Context) {
 					defaultLogger.Debug("consumer=%q close", c.Id)
 					break Consume
 				}
+
 				msg := &d
-				defaultLogger.Info("mq consume=%q key=%q msg_id=%v msg=%q", c.Id, msg.RoutingKey, msg.Headers["msg_id"], string(msg.Body))
+				defaultLogger.
+					WithMessageId(GetMessageId(msg)).
+					Info("consumer=%q key=%q msg=%q", c.Id, msg.RoutingKey, string(msg.Body))
+
 				c.messageFunc(c.mqClose, msg)
 			}
 		}

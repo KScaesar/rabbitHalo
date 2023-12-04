@@ -212,10 +212,13 @@ func handleDefaultConsumerError(next ConsumerFunc) ConsumerFunc {
 		switch {
 		default:
 			msg.Ack(false)
-			defaultLogger.Error(
-				"default error handle: msgType=%q: consumer=%q: key=%q: payload=%q: %v",
-				msg.Type, msg.ConsumerTag, msg.RoutingKey, msg.Body, err,
-			)
+
+			defaultLogger.
+				WithMessageId(GetMessageId(msg)).
+				Error(
+					"default error handle: msgType=%q: consumer=%q: key=%q: payload=%q: %v",
+					msg.Type, msg.ConsumerTag, msg.RoutingKey, msg.Body, err,
+				)
 			return err
 		}
 	}
